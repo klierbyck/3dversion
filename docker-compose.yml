@@ -1,0 +1,35 @@
+services:
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      # 前端与 API 跨域部署时填写前端来源（逗号分隔）；同源反代留空即可。
+      ALLOWED_ORIGINS: ""
+    volumes:
+      - ./data:/data/3dvision
+  # PostgreSQL/Redis 为后续仓储与队列预留，默认不随 docker compose up 启动；
+  # 需要时执行：docker compose --profile storage up -d
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["storage"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: threevision
+      POSTGRES_USER: threevision
+      POSTGRES_PASSWORD: change-this-password   # 生产部署前必须替换，建议改用 ${POSTGRES_PASSWORD} 配合 .env
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    expose:
+      - "5432"
+  redis:
+    image: redis:7-alpine
+    profiles: ["storage"]
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./data/redis:/data
+    expose:
+      - "6379"

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+__pycache__/
+*.pyc
+.venv/
+.env
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

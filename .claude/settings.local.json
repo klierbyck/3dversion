@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -vE \"\\\\.\\(tsbuildinfo|pyc\\)$\")",
+      "Bash(cd *)",
+      "PowerShell(node -e \"const l=require\\('C:/Users/Lenovo/Desktop/demo/3dvision/package-lock.json'\\); ['vite','typescript','@vitejs/plugin-react','three','react','react-dom','lucide-react','@types/three','@types/react','@types/react-dom'].forEach\\(n=>console.log\\(n, l.packages['node_modules/'+n]?.version\\)\\); console.log\\('lockfileVersion', l.lockfileVersion\\)\")",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\Lenovo\\\\Desktop\\\\demo\\\\3dvision\"; Get-ChildItem -File | Select-Object -ExpandProperty Name; Write-Output \"---backend---\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m compileall backend\\\\main.py 2>&1; if \\(-not \\(Test-Path \".\\\\.venv\"\\)\\) { python -m compileall backend })",
+      "mcp__chrome-devtools__new_page",
+      "mcp__chrome-devtools__list_console_messages",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__click",
+      "mcp__chrome-devtools__evaluate_script",
+      "mcp__chrome-devtools__close_page",
+      "PowerShell(Remove-Item *)"
+    ]
+  }
+}

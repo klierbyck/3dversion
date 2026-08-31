@@ -1,9 +1,26 @@
-import type { Release, RuntimeError, SceneDocument } from './types';
+import { demoById, demoProjects, emptyScene, upgradeDemoScene } from './demos';
+import {
+  uid,
+  type ProjectMeta,
+  type Release,
+  type RuntimeError,
+  type SceneDocument,
+} from './types';
 
 // 未配置后端地址时直接使用本地持久化，避免独立运行前端产生无意义的网络错误。
 const API_BASE = import.meta.env.VITE_API_BASE as string | undefined;
-const localKey = 'three-vision-project';
-const releasesKey = 'three-vision-releases';
+const storeKey = 'three-vision-projects';
+const legacyDraftKey = 'three-vision-project';
+const legacyReleasesKey = 'three-vision-releases';
+
+/** 单个项目的本地持久化结构：元信息 + 草稿 + 发布历史。 */
+type StoredProject = {
+  meta: ProjectMeta;
+  draft: SceneDocument;
+  revision: number;
+  releases: Release[];
+};
+type ProjectStore = Record<string, StoredProject>;
 
 /** 草稿版本冲突（HTTP 409）：远端已有更新的草稿，需要用户刷新加载。 */
 export class DraftConflictError extends Error {
@@ -23,33 +40,255 @@ function readJson(key: string): unknown | null {
   }
 }
 
-function localReleases(): Release[] {
-  const history = readJson(releasesKey);
-  return Array.isArray(history) ? (history as Release[]) : [];
+function demoMeta(demo: (typeof demoProjects)[number], updatedAt?: string): ProjectMeta {
+  const meta: ProjectMeta = {
+    id: demo.id,
+    name: demo.name,
+    description: demo.description,
+    icon: demo.icon,
+    isDemo: demo.isDemo,
+    runtime: demo.runtime,
+  };
+  return updatedAt ? { ...meta, updatedAt } : meta;
 }
 
-export async function saveDraft(projectId: string, scene: SceneDocument, revision: number): Promise<{ revision: number; local: boolean }> {
+function seedStore(): ProjectStore {
+  const now = Date.now();
+  const store: ProjectStore = {};
+  demoProjects.forEach((demo, index) => {
+    // 错开时间戳，保证列表排序与示例目录顺序一致。
+    store[demo.id] = {
+      meta: demoMeta(demo, new Date(now - index * 60000).toISOString()),
+      draft: demo.scene,
+      revision: 0,
+      releases: [],
+    };
+  });
+  return store;
+}
+
+/** 旧版单项目 localStorage 数据迁移到首个示例项目，避免升级后丢失草稿与发布记录。 */
+function migrateLegacy(store: ProjectStore) {
+  const targetId = demoProjects[0]?.id;
+  if (!targetId || !store[targetId]) return;
+  const legacy = readJson(legacyDraftKey) as {
+    scene?: SceneDocument;
+    revision?: number;
+  } | null;
+  if (legacy?.scene?.nodes?.length) {
+    store[targetId] = {
+      ...store[targetId],
+      draft: legacy.scene,
+      revision: legacy.revision ?? 0,
+    };
+  }
+  const legacyReleases = readJson(legacyReleasesKey);
+  if (Array.isArray(legacyReleases) && legacyReleases.length > 0) {
+    store[targetId] = {
+      ...store[targetId],
+      releases: legacyReleases as Release[],
+    };
+  }
+}
+
+function writeStore(store: ProjectStore) {
+  try {
+    localStorage.setItem(storeKey, JSON.stringify(store));
+  } catch {
+    /* 存储不可用时静默降级为内存态。 */
+  }
+}
+
+/** 同步内置示例元信息，并将完全未编辑的旧默认场景升级到当前版本。 */
+function syncDemoCatalog(store: ProjectStore): boolean {
+  let changed = false;
+  demoProjects.forEach((demo) => {
+    const project = store[demo.id];
+    if (!project) return;
+    const meta = demoMeta(demo, project.meta.updatedAt);
+    const draft = upgradeDemoScene(demo.id, project.draft);
+    if (JSON.stringify(project.meta) !== JSON.stringify(meta) || draft !== project.draft) {
+      store[demo.id] = { ...project, meta, draft };
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function readStore(): ProjectStore {
+  const raw = readJson(storeKey) as ProjectStore | null;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    if (syncDemoCatalog(raw)) writeStore(raw);
+    return raw;
+  }
+  const store = seedStore();
+  migrateLegacy(store);
+  writeStore(store);
+  return store;
+}
+
+function localSaveDraft(projectId: string, scene: SceneDocument, revision: number) {
+  const store = readStore();
+  const project = store[projectId];
+  const updatedAt = new Date().toISOString();
+  if (project) {
+    store[projectId] = {
+      ...project,
+      draft: scene,
+      revision: revision + 1,
+      meta: { ...project.meta, updatedAt },
+    };
+  } else {
+    store[projectId] = {
+      meta: {
+        id: projectId,
+        name: '未命名项目',
+        description: '',
+        icon: '🌐',
+        isDemo: false,
+        updatedAt,
+      },
+      draft: scene,
+      revision: revision + 1,
+      releases: [],
+    };
+  }
+  writeStore(store);
+}
+
+/** 后端项目列表与本地示例目录合并：补齐示例的图标、描述与运行态配置。 */
+function mergeDemoCatalog(list: ProjectMeta[]): ProjectMeta[] {
+  const merged = list.map((item) => {
+    const demo = demoById(item.id);
+    return demo
+      ? {
+          ...item,
+          icon: item.icon || demo.icon,
+          description: item.description || demo.description,
+          isDemo: true,
+          runtime: item.runtime ?? demo.runtime,
+        }
+      : item;
+  });
+  const known = new Set(list.map((item) => item.id));
+  demoProjects.forEach((demo) => {
+    if (!known.has(demo.id)) merged.push(demoMeta(demo));
+  });
+  return merged;
+}
+
+export async function listProjects(): Promise<ProjectMeta[]> {
+  if (API_BASE) {
+    try {
+      const response = await fetch(`${API_BASE}/projects`);
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data.data)) return mergeDemoCatalog(data.data as ProjectMeta[]);
+      }
+    } catch {
+      /* 接口不可用时退回本地项目库。 */
+    }
+  }
+  return Object.values(readStore())
+    .map((project) => ({
+      ...project.meta,
+      nodeCount: project.draft.nodes.length,
+    }))
+    .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+}
+
+export async function getProject(projectId: string): Promise<ProjectMeta | null> {
+  return (await listProjects()).find((item) => item.id === projectId) ?? null;
+}
+
+export async function createProject(name: string, description: string): Promise<ProjectMeta> {
+  const payload = {
+    name: name.trim() || '未命名项目',
+    description: description.trim(),
+  };
+  if (API_BASE) {
+    try {
+      const response = await fetch(`${API_BASE}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) return (await response.json()).data as ProjectMeta;
+    } catch {
+      /* 创建接口不可用时退回本地。 */
+    }
+  }
+  const store = readStore();
+  const meta: ProjectMeta = {
+    id: `project-${uid()}`,
+    name: payload.name,
+    description: payload.description || '暂无描述',
+    icon: ['🌐', '🏢', '🏭', '📦', '⚡', '🚚'][Object.keys(store).length % 6],
+    isDemo: false,
+    updatedAt: new Date().toISOString(),
+  };
+  store[meta.id] = {
+    meta,
+    draft: { ...emptyScene, nodes: [] },
+    revision: 0,
+    releases: [],
+  };
+  writeStore(store);
+  return meta;
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  if (API_BASE) {
+    try {
+      await fetch(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
+    } catch {
+      /* 后端不可达时仍删除本地记录。 */
+    }
+  }
+  const store = readStore();
+  delete store[projectId];
+  writeStore(store);
+}
+
+export async function saveDraft(
+  projectId: string,
+  scene: SceneDocument,
+  revision: number,
+): Promise<{ revision: number; local: boolean }> {
   if (!API_BASE) {
-    localStorage.setItem(localKey, JSON.stringify({ scene, revision: revision + 1 }));
+    localSaveDraft(projectId, scene, revision);
     return { revision: revision + 1, local: true };
   }
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/projects/${projectId}/draft`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scene, revision }) });
+    response = await fetch(`${API_BASE}/projects/${projectId}/draft`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene, revision }),
+    });
   } catch {
     // 后端不可达（未启动/网络断开）时降级到浏览器本地草稿，保证前端可独立体验。
-    localStorage.setItem(localKey, JSON.stringify({ scene, revision: revision + 1 }));
+    localSaveDraft(projectId, scene, revision);
     return { revision: revision + 1, local: true };
   }
   if (response.status === 409) throw new DraftConflictError();
   if (!response.ok) throw new Error(`保存失败：HTTP ${response.status}`);
-  return { revision: (await response.json()).data.revision as number, local: false };
+  return {
+    revision: (await response.json()).data.revision as number,
+    local: false,
+  };
 }
 
-export async function loadDraft(projectId: string): Promise<{ scene: SceneDocument; revision: number; local?: boolean } | null> {
-  const local = (): { scene: SceneDocument; revision: number; local: boolean } | null => {
-    const project = readJson(localKey) as { scene?: SceneDocument; revision?: number } | null;
-    return project?.scene ? { scene: project.scene, revision: project.revision ?? 0, local: true } : null;
+export async function loadDraft(
+  projectId: string,
+): Promise<{ scene: SceneDocument; revision: number; local?: boolean } | null> {
+  const local = (): {
+    scene: SceneDocument;
+    revision: number;
+    local: boolean;
+  } | null => {
+    const project = readStore()[projectId];
+    return project ? { scene: project.draft, revision: project.revision, local: true } : null;
   };
   if (!API_BASE) return local();
   try {
@@ -69,21 +308,49 @@ export async function listReleases(projectId: string): Promise<Release[]> {
         const data = await response.json();
         if (Array.isArray(data.data)) return data.data as Release[];
       }
-    } catch { /* 接口不可用时退回本地发布历史。 */ }
+    } catch {
+      /* 接口不可用时退回本地发布历史。 */
+    }
   }
-  return localReleases();
+  return readStore()[projectId]?.releases ?? [];
 }
 
 export async function createRelease(projectId: string, scene: SceneDocument): Promise<Release> {
   const createLocalRelease = () => {
-    const history = localReleases();
-    const release: Release = { id: `local-${crypto.randomUUID()}`, version: `v1.0.${history.length}`, createdAt: new Date().toISOString(), createdBy: '本地用户', scene };
-    localStorage.setItem(releasesKey, JSON.stringify([release, ...history]));
+    const store = readStore();
+    const project = store[projectId];
+    const history = project?.releases ?? [];
+    const release: Release = {
+      id: `local-${uid()}`,
+      version: `v1.0.${history.length}`,
+      createdAt: new Date().toISOString(),
+      createdBy: '本地用户',
+      scene,
+    };
+    store[projectId] = project
+      ? { ...project, releases: [release, ...history] }
+      : {
+          meta: {
+            id: projectId,
+            name: '未命名项目',
+            description: '',
+            icon: '🌐',
+            isDemo: false,
+          },
+          draft: scene,
+          revision: 0,
+          releases: [release],
+        };
+    writeStore(store);
     return release;
   };
   if (!API_BASE) return createLocalRelease();
   try {
-    const response = await fetch(`${API_BASE}/projects/${projectId}/releases`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scene }) });
+    const response = await fetch(`${API_BASE}/projects/${projectId}/releases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene }),
+    });
     if (!response.ok) throw new Error('接口不可用');
     return (await response.json()).data;
   } catch {
@@ -92,9 +359,18 @@ export async function createRelease(projectId: string, scene: SceneDocument): Pr
   }
 }
 
-export async function reportRuntimeError(projectId: string, error: Omit<RuntimeError, 'id'> & { id?: string }) {
+export async function reportRuntimeError(
+  projectId: string,
+  error: Omit<RuntimeError, 'id'> & { id?: string },
+) {
   if (!API_BASE) return;
   try {
-    await fetch(`${API_BASE}/runtime/errors`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...error, projectId }) });
-  } catch { /* 运行态错误不上抛，避免影响用户查看场景。 */ }
+    await fetch(`${API_BASE}/runtime/errors`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...error, projectId }),
+    });
+  } catch {
+    /* 运行态错误不上抛，避免影响用户查看场景。 */
+  }
 }

@@ -104,8 +104,18 @@ function syncDemoCatalog(store: ProjectStore): boolean {
   let changed = false;
   demoProjects.forEach((demo) => {
     const project = store[demo.id];
-    if (!project) return;
-    const meta = demoMeta(demo, project.meta.updatedAt);
+    if (!project || typeof project !== 'object' || Array.isArray(project)) {
+      // 缓存被手工修改或旧版本写入空值时，重建该示例项目的最小可用记录。
+      store[demo.id] = {
+        meta: demoMeta(demo),
+        draft: demo.scene,
+        revision: 0,
+        releases: [],
+      };
+      changed = true;
+      return;
+    }
+    const meta = demoMeta(demo, project.meta?.updatedAt);
     const draft = upgradeDemoScene(demo.id, project.draft);
     if (JSON.stringify(project.meta) !== JSON.stringify(meta) || draft !== project.draft) {
       store[demo.id] = { ...project, meta, draft };
@@ -190,9 +200,12 @@ export async function listProjects(): Promise<ProjectMeta[]> {
     }
   }
   return Object.values(readStore())
+    .filter((project): project is StoredProject =>
+      Boolean(project && typeof project === 'object' && !Array.isArray(project)),
+    )
     .map((project) => ({
-      ...project.meta,
-      nodeCount: project.draft.nodes.length,
+      ...(project.meta ?? {}),
+      nodeCount: project.draft?.nodes?.length ?? 0,
     }))
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
@@ -288,13 +301,26 @@ export async function loadDraft(
     local: boolean;
   } | null => {
     const project = readStore()[projectId];
-    return project ? { scene: project.draft, revision: project.revision, local: true } : null;
+    return project
+      ? {
+          // 对本地缓存做同一层场景兜底，避免旧数据为 null 时编辑器初始化崩溃。
+          scene: upgradeDemoScene(projectId, project.draft),
+          revision: project.revision ?? 0,
+          local: true,
+        }
+      : null;
   };
   if (!API_BASE) return local();
   try {
     const response = await fetch(`${API_BASE}/projects/${projectId}/draft`);
     if (!response.ok) throw new Error('接口不可用');
-    return (await response.json()).data;
+    const data = (await response.json()).data as
+      { scene?: SceneDocument | null; revision?: number } | null | undefined;
+    if (!data) return null;
+    return {
+      scene: upgradeDemoScene(projectId, data.scene),
+      revision: data.revision ?? 0,
+    };
   } catch {
     return local();
   }

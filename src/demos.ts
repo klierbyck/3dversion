@@ -3,6 +3,7 @@ import {
   type NodeKind,
   type ProjectMeta,
   type SceneDocument,
+  type SceneEventRule,
   type SceneNode,
 } from './types';
 
@@ -103,6 +104,63 @@ const smartParkScene: SceneDocument = {
   ],
 };
 
+type DemoEventSpec = {
+  name: string;
+  triggerNode: string;
+  action: 'focusCamera' | 'showPopup' | 'setColor' | 'setVisibility';
+  actionNode?: string;
+  message?: string;
+  color?: string;
+  visible?: boolean;
+};
+
+/** 根据节点名称给示例场景挂载事件，避免随机节点 ID 影响事件目标映射。 */
+function sceneWithEvents(scene: SceneDocument, specs: DemoEventSpec[]): SceneDocument {
+  const idByName = new Map(scene.nodes.map((node) => [node.name, node.id]));
+  const events: SceneEventRule[] = specs.map((spec, index) => {
+    const triggerId = idByName.get(spec.triggerNode) ?? null;
+    const targetId = idByName.get(spec.actionNode ?? spec.triggerNode) ?? triggerId;
+    return {
+      id: `demo-event-${index + 1}`,
+      name: spec.name,
+      enabled: true,
+      scope: 'node',
+      ownerNodeId: triggerId,
+      trigger: { type: 'click', nodeId: triggerId },
+      actions: [
+        {
+          id: `demo-action-${index + 1}`,
+          type: spec.action,
+          targetId,
+          message: spec.message,
+          color: spec.color,
+          visible: spec.visible,
+        },
+      ],
+    };
+  });
+  // 每个示例都提供一个场景级入口事件，用于验证“场景编排”和“对象事件”的范围区别。
+  const overviewTarget = scene.nodes.find((node) =>
+    ['building', 'office', 'factory', 'warehouse'].includes(node.kind),
+  );
+  const sceneEvent: SceneEventRule = {
+    id: 'demo-scene-load',
+    name: '场景加载定位总览',
+    enabled: true,
+    scope: 'scene',
+    ownerNodeId: null,
+    trigger: { type: 'sceneLoad', nodeId: null },
+    actions: [
+      {
+        id: 'demo-scene-load-action',
+        type: 'focusCamera',
+        targetId: overviewTarget?.id ?? null,
+      },
+    ],
+  };
+  return { ...scene, events: [sceneEvent, ...events] };
+}
+
 /**
  * 示例项目目录：项目列表、编辑器初始场景、运行态大屏配置共用这一份数据。
  * demo-park 沿用历史 ID，保证旧版本保存过的草稿仍能对上项目。
@@ -123,7 +181,25 @@ export const demoProjects: DemoProject[] = [
         { label: '环境指数', value: '92', delta: '良好' },
       ],
     },
-    scene: smartParkScene,
+    scene: sceneWithEvents(smartParkScene, [
+      {
+        name: '点击运营中心查看总览',
+        triggerNode: '园区运营中心',
+        action: 'showPopup',
+        message: '园区运营中心：在线设备 1,284 台，今日运行平稳。',
+      },
+      {
+        name: '点击巡逻车高亮位置',
+        triggerNode: '安防巡逻车',
+        action: 'setColor',
+        color: '#ff6b6b',
+      },
+      {
+        name: '点击研发中心聚焦视角',
+        triggerNode: '研发创新中心',
+        action: 'focusCamera',
+      },
+    ]),
   },
   {
     id: 'demo-energy',
@@ -140,37 +216,58 @@ export const demoProjects: DemoProject[] = [
         { label: '设备在线率', value: '99.2%', delta: '正常' },
       ],
     },
-    scene: {
-      schemaVersion: '1.1.0',
-      nodes: [
-        n('windTurbine', '1号风机', [-12, 0, -9]),
-        n('windTurbine', '2号风机', [-12, 0, -1]),
-        n('windTurbine', '3号风机', [-12, 0, 7]),
-        n('windTurbine', '4号风机', [-6.5, 0, -12]),
-        n('solarPanel', '光伏阵列A1', [2, 0, 3]),
-        n('solarPanel', '光伏阵列B1', [4.6, 0, 3]),
-        n('solarPanel', '光伏阵列C1', [7.2, 0, 3]),
-        n('solarPanel', '光伏阵列A2', [2, 0, 5.6]),
-        n('solarPanel', '光伏阵列B2', [4.6, 0, 5.6]),
-        n('solarPanel', '光伏阵列C2', [7.2, 0, 5.6]),
-        n('warehouse', '储能控制中心', [3, 0, -5], { scale: [1.05, 1, 1] }),
-        n('tank', '储能罐1号', [10, 0, -8.5]),
-        n('tank', '储能罐2号', [13, 0, -8.5]),
-        n('pipeline', '输能管道', [11.5, 0, -5.8], { rotation: [0, 90, 0] }),
-        n('coolingTower', '冷却塔', [13.5, 0, -3]),
-        n('sensor', '光照传感器', [3.3, 0, 4.3], { value: 82 }),
-        n('sensor', '温度传感器', [8.8, 0, 7.4], { value: 76 }),
-        n('sensor', '风机状态监测', [-9.5, 0, -5], { value: 96 }),
-        n('bar', '风电功率', [-1.5, 0, -1], { value: 72 }),
-        n('bar', '光伏功率', [-0.5, 0, -1], { value: 54, color: '#f4b860' }),
-        n('bar', '储能充放', [0.5, 0, -1], { value: 88, color: '#6ea8fe' }),
-        n('label', '实时总功率', [0, 0, 0.9], { value: 76 }),
-        n('popup', '1号风机预警', [-9, 0, 3]),
-        n('text', '风光储一体化电站', [4.5, 0.1, 9], { scale: [2.2, 1.3, 1] }),
-        n('tree', '场区绿化01', [-6.5, 0, -8]),
-        n('tree', '场区绿化02', [-4, 0, -8.2]),
+    scene: sceneWithEvents(
+      {
+        schemaVersion: '1.1.0',
+        nodes: [
+          n('windTurbine', '1号风机', [-12, 0, -9]),
+          n('windTurbine', '2号风机', [-12, 0, -1]),
+          n('windTurbine', '3号风机', [-12, 0, 7]),
+          n('windTurbine', '4号风机', [-6.5, 0, -12]),
+          n('solarPanel', '光伏阵列A1', [2, 0, 3]),
+          n('solarPanel', '光伏阵列B1', [4.6, 0, 3]),
+          n('solarPanel', '光伏阵列C1', [7.2, 0, 3]),
+          n('solarPanel', '光伏阵列A2', [2, 0, 5.6]),
+          n('solarPanel', '光伏阵列B2', [4.6, 0, 5.6]),
+          n('solarPanel', '光伏阵列C2', [7.2, 0, 5.6]),
+          n('warehouse', '储能控制中心', [3, 0, -5], { scale: [1.05, 1, 1] }),
+          n('tank', '储能罐1号', [10, 0, -8.5]),
+          n('tank', '储能罐2号', [13, 0, -8.5]),
+          n('pipeline', '输能管道', [11.5, 0, -5.8], { rotation: [0, 90, 0] }),
+          n('coolingTower', '冷却塔', [13.5, 0, -3]),
+          n('sensor', '光照传感器', [3.3, 0, 4.3], { value: 82 }),
+          n('sensor', '温度传感器', [8.8, 0, 7.4], { value: 76 }),
+          n('sensor', '风机状态监测', [-9.5, 0, -5], { value: 96 }),
+          n('bar', '风电功率', [-1.5, 0, -1], { value: 72 }),
+          n('bar', '光伏功率', [-0.5, 0, -1], { value: 54, color: '#f4b860' }),
+          n('bar', '储能充放', [0.5, 0, -1], { value: 88, color: '#6ea8fe' }),
+          n('label', '实时总功率', [0, 0, 0.9], { value: 76 }),
+          n('popup', '1号风机预警', [-9, 0, 3]),
+          n('text', '风光储一体化电站', [4.5, 0.1, 9], { scale: [2.2, 1.3, 1] }),
+          n('tree', '场区绿化01', [-6.5, 0, -8]),
+          n('tree', '场区绿化02', [-4, 0, -8.2]),
+        ],
+      },
+      [
+        {
+          name: '点击1号风机查看预警',
+          triggerNode: '1号风机',
+          action: 'showPopup',
+          message: '1号风机：振动趋势偏高，建议安排巡检。',
+        },
+        {
+          name: '点击光伏阵列高亮发电区',
+          triggerNode: '光伏阵列B2',
+          action: 'setColor',
+          color: '#ffd166',
+        },
+        {
+          name: '点击储能中心聚焦',
+          triggerNode: '储能控制中心',
+          action: 'focusCamera',
+        },
       ],
-    },
+    ),
   },
   {
     id: 'demo-factory',
@@ -187,35 +284,56 @@ export const demoProjects: DemoProject[] = [
         { label: '活动告警', value: '2 起', delta: '待处理' },
       ],
     },
-    scene: {
-      schemaVersion: '1.1.0',
-      nodes: [
-        n('factory', '总装车间', [-6, 0, -6], { scale: [1.15, 1, 1] }),
-        n('factory', '部装车间', [3.5, 0, -6], { scale: [1.15, 1, 1] }),
-        n('warehouse', '成品仓库', [11, 0, -3], { rotation: [0, 90, 0] }),
-        n('road', '厂区主干道', [0, 0, 1.5], { scale: [2.2, 1, 1] }),
-        n('conveyor', '1号线输送', [-6, 0, -2.8]),
-        n('conveyor', '2号线输送', [3.5, 0, -2.8]),
-        n('gantryCrane', '成品吊装龙门吊', [11, 0, 3.5]),
-        n('truck', '成品运输车', [-2.5, 0, 1.1]),
-        n('truck', '原料运输车', [5.5, 0, 1.9]),
-        n('tank', '原料储罐1号', [-11.5, 0, -3]),
-        n('tank', '原料储罐2号', [-11.5, 0, -6.5]),
-        n('pipeline', '原料管道', [-11.5, 0, -4.75], { rotation: [0, 90, 0] }),
-        n('coolingTower', '循环水塔', [-11.5, 0, -10.5]),
-        n('sensor', '产线温度监测', [-3.5, 0, -3.7], { value: 78 }),
-        n('sensor', '设备振动监测', [1, 0, -3.7], { value: 64 }),
-        n('sensor', '仓库环境监测', [7.5, 0, -0.5], { value: 91 }),
-        n('bar', '1线良率', [5.5, 0, 6.5], { value: 92 }),
-        n('bar', '2线良率', [6.5, 0, 6.5], { value: 87, color: '#6ea8fe' }),
-        n('bar', '3线良率', [7.5, 0, 6.5], { value: 95, color: '#f4b860' }),
-        n('label', '今日产量看板', [0.5, 0, 5], { value: 92 }),
-        n('popup', '3号产线OEE预警', [-4.5, 0, 5.5]),
-        n('text', '智能工厂数字孪生', [0, 0.1, 9.5], { scale: [2.2, 1.3, 1] }),
-        n('tree', '厂区绿化01', [-9, 0, 7]),
-        n('tree', '厂区绿化02', [10, 0, 8]),
+    scene: sceneWithEvents(
+      {
+        schemaVersion: '1.1.0',
+        nodes: [
+          n('factory', '总装车间', [-6, 0, -6], { scale: [1.15, 1, 1] }),
+          n('factory', '部装车间', [3.5, 0, -6], { scale: [1.15, 1, 1] }),
+          n('warehouse', '成品仓库', [11, 0, -3], { rotation: [0, 90, 0] }),
+          n('road', '厂区主干道', [0, 0, 1.5], { scale: [2.2, 1, 1] }),
+          n('conveyor', '1号线输送', [-6, 0, -2.8]),
+          n('conveyor', '2号线输送', [3.5, 0, -2.8]),
+          n('gantryCrane', '成品吊装龙门吊', [11, 0, 3.5]),
+          n('truck', '成品运输车', [-2.5, 0, 1.1]),
+          n('truck', '原料运输车', [5.5, 0, 1.9]),
+          n('tank', '原料储罐1号', [-11.5, 0, -3]),
+          n('tank', '原料储罐2号', [-11.5, 0, -6.5]),
+          n('pipeline', '原料管道', [-11.5, 0, -4.75], { rotation: [0, 90, 0] }),
+          n('coolingTower', '循环水塔', [-11.5, 0, -10.5]),
+          n('sensor', '产线温度监测', [-3.5, 0, -3.7], { value: 78 }),
+          n('sensor', '设备振动监测', [1, 0, -3.7], { value: 64 }),
+          n('sensor', '仓库环境监测', [7.5, 0, -0.5], { value: 91 }),
+          n('bar', '1线良率', [5.5, 0, 6.5], { value: 92 }),
+          n('bar', '2线良率', [6.5, 0, 6.5], { value: 87, color: '#6ea8fe' }),
+          n('bar', '3线良率', [7.5, 0, 6.5], { value: 95, color: '#f4b860' }),
+          n('label', '今日产量看板', [0.5, 0, 5], { value: 92 }),
+          n('popup', '3号产线OEE预警', [-4.5, 0, 5.5]),
+          n('text', '智能工厂数字孪生', [0, 0.1, 9.5], { scale: [2.2, 1.3, 1] }),
+          n('tree', '厂区绿化01', [-9, 0, 7]),
+          n('tree', '厂区绿化02', [10, 0, 8]),
+        ],
+      },
+      [
+        {
+          name: '点击总装车间看生产状态',
+          triggerNode: '总装车间',
+          action: 'showPopup',
+          message: '总装车间：OEE 87.2%，当前节拍正常。',
+        },
+        {
+          name: '点击振动监测标红',
+          triggerNode: '设备振动监测',
+          action: 'setColor',
+          color: '#ff6b6b',
+        },
+        {
+          name: '点击成品仓库聚焦',
+          triggerNode: '成品仓库',
+          action: 'focusCamera',
+        },
       ],
-    },
+    ),
   },
   {
     id: 'demo-logistics',
@@ -232,41 +350,62 @@ export const demoProjects: DemoProject[] = [
         { label: '在途车辆', value: '41', delta: '实时' },
       ],
     },
-    scene: {
-      schemaVersion: '1.1.0',
-      nodes: [
-        n('warehouse', '1号库', [-8, 0, -5]),
-        n('warehouse', '2号库', [0, 0, -5]),
-        n('warehouse', '3号库', [8, 0, -5]),
-        n('road', '园区主路', [0, 0, 3], { scale: [2.6, 1, 1] }),
-        n('conveyor', '1号月台输送', [-6.2, 0, -2.4]),
-        n('conveyor', '2号月台输送', [1.5, 0, -2.4]),
-        n('conveyor', '3号月台输送', [9.2, 0, -2.4]),
-        n('gantryCrane', '集装箱龙门吊', [8, 0, 0]),
-        n('truck', '进场车辆01', [-7, 0, 3.1]),
-        n('truck', '装卸车辆02', [0.5, 0, 2.5]),
-        n('truck', '离场车辆03', [7.5, 0, 3.5]),
-        n('office', '运营调度中心', [0, 0, 8]),
-        n('tree', '园区绿化01', [-6.5, 0, 6.2]),
-        n('tree', '园区绿化02', [-10, 0, 6.2]),
-        n('tree', '园区绿化03', [10.5, 0, 6.2]),
-        n('sensor', '地磅监测点', [-3, 0, 5.2], { value: 88 }),
-        n('sensor', '冷链温控', [-11.5, 0, -9], { value: 45 }),
-        n('bar', '1号库吞吐', [11, 0, 7.5], { value: 66 }),
-        n('bar', '2号库吞吐', [12, 0, 7.5], { value: 81, color: '#6ea8fe' }),
-        n('bar', '3号库吞吐', [13, 0, 7.5], { value: 58, color: '#f4b860' }),
-        n('label', '吞吐对比', [12, 0, 9.6], { value: 68 }),
-        n('label', '今日入库看板', [-5, 0, 5.4], { value: 81 }),
-        n('popup', '月台B拥堵预警', [5.5, 0, 5.4]),
-        n('text', '智慧物流园', [0, 0.1, 11.5], { scale: [2.2, 1.3, 1] }),
+    scene: sceneWithEvents(
+      {
+        schemaVersion: '1.1.0',
+        nodes: [
+          n('warehouse', '1号库', [-8, 0, -5]),
+          n('warehouse', '2号库', [0, 0, -5]),
+          n('warehouse', '3号库', [8, 0, -5]),
+          n('road', '园区主路', [0, 0, 3], { scale: [2.6, 1, 1] }),
+          n('conveyor', '1号月台输送', [-6.2, 0, -2.4]),
+          n('conveyor', '2号月台输送', [1.5, 0, -2.4]),
+          n('conveyor', '3号月台输送', [9.2, 0, -2.4]),
+          n('gantryCrane', '集装箱龙门吊', [8, 0, 0]),
+          n('truck', '进场车辆01', [-7, 0, 3.1]),
+          n('truck', '装卸车辆02', [0.5, 0, 2.5]),
+          n('truck', '离场车辆03', [7.5, 0, 3.5]),
+          n('office', '运营调度中心', [0, 0, 8]),
+          n('tree', '园区绿化01', [-6.5, 0, 6.2]),
+          n('tree', '园区绿化02', [-10, 0, 6.2]),
+          n('tree', '园区绿化03', [10.5, 0, 6.2]),
+          n('sensor', '地磅监测点', [-3, 0, 5.2], { value: 88 }),
+          n('sensor', '冷链温控', [-11.5, 0, -9], { value: 45 }),
+          n('bar', '1号库吞吐', [11, 0, 7.5], { value: 66 }),
+          n('bar', '2号库吞吐', [12, 0, 7.5], { value: 81, color: '#6ea8fe' }),
+          n('bar', '3号库吞吐', [13, 0, 7.5], { value: 58, color: '#f4b860' }),
+          n('label', '吞吐对比', [12, 0, 9.6], { value: 68 }),
+          n('label', '今日入库看板', [-5, 0, 5.4], { value: 81 }),
+          n('popup', '月台B拥堵预警', [5.5, 0, 5.4]),
+          n('text', '智慧物流园', [0, 0.1, 11.5], { scale: [2.2, 1.3, 1] }),
+        ],
+      },
+      [
+        {
+          name: '点击月台预警查看拥堵',
+          triggerNode: '月台B拥堵预警',
+          action: 'showPopup',
+          message: '月台B：排队车辆 6 台，建议引导至 3 号库月台。',
+        },
+        {
+          name: '点击离场车辆标记',
+          triggerNode: '离场车辆03',
+          action: 'setColor',
+          color: '#7ce5c1',
+        },
+        {
+          name: '点击调度中心聚焦',
+          triggerNode: '运营调度中心',
+          action: 'focusCamera',
+        },
       ],
-    },
+    ),
   },
 ];
 
 const demoIndex = new Map(demoProjects.map((demo) => [demo.id, demo]));
 
-function sceneWithoutIds(scene: SceneDocument) {
+function sceneStructureWithoutIds(scene: SceneDocument) {
   return {
     schemaVersion: scene.schemaVersion,
     nodes: scene.nodes.map(({ id: _id, ...node }) => node),
@@ -274,14 +413,76 @@ function sceneWithoutIds(scene: SceneDocument) {
 }
 
 /**
- * 仅升级完全未编辑的旧园区默认场景。
- * 节点任一属性发生变化都视为用户草稿，不做覆盖。
+ * 仅升级完全未编辑的示例默认场景。
+ * 节点任一属性发生变化都视为用户草稿，不做覆盖；只给原始示例补齐新版事件规则。
  */
-export function upgradeDemoScene(projectId: string, scene: SceneDocument): SceneDocument {
-  if (projectId !== 'demo-park') return scene;
+export function upgradeDemoScene(
+  projectId: string,
+  scene: SceneDocument | null | undefined,
+): SceneDocument {
+  const demo = demoById(projectId);
+  // 旧版本缓存可能写入 null 或不完整对象，先回退到安全场景，避免读取 events 时崩溃。
+  if (!isSceneDocument(scene)) return demo?.scene ?? emptyScene;
+  if (!demo) return scene;
   const isLegacySeed =
-    JSON.stringify(sceneWithoutIds(scene)) === JSON.stringify(sceneWithoutIds(legacyParkScene));
-  return isLegacySeed ? smartParkScene : scene;
+    projectId === 'demo-park' &&
+    JSON.stringify(sceneStructureWithoutIds(scene)) ===
+      JSON.stringify(sceneStructureWithoutIds(legacyParkScene));
+  const isCurrentSeedWithoutEvents =
+    !scene.events?.length &&
+    JSON.stringify(sceneStructureWithoutIds(scene)) ===
+      JSON.stringify(sceneStructureWithoutIds(demo.scene));
+  return isLegacySeed || isCurrentSeedWithoutEvents ? demo.scene : normalizeSceneEvents(scene);
+}
+
+/** 运行时校验本地缓存/接口返回的场景结构，防止脏数据击穿项目列表页面。 */
+function isSceneDocument(value: unknown): value is SceneDocument {
+  return Boolean(
+    value && typeof value === 'object' && Array.isArray((value as { nodes?: unknown }).nodes),
+  );
+}
+
+/** 将旧版仅有 trigger.nodeId 的事件迁移为显式场景级/对象级规则。 */
+function normalizeSceneEvents(scene: SceneDocument): SceneDocument {
+  const rawEvents = Array.isArray((scene as { events?: unknown }).events)
+    ? ((scene as { events: unknown[] }).events ?? [])
+    : [];
+  const nodeIds = new Set(scene.nodes.map((node) => node.id));
+  const events = rawEvents
+    .filter(isEventRule)
+    .map((rule) => {
+      const scope = rule.scope ?? (rule.trigger.type === 'sceneLoad' ? 'scene' : 'node');
+      const triggerNodeId = rule.trigger.nodeId ?? null;
+      const ownerNodeId = scope === 'scene' ? null : (rule.ownerNodeId ?? triggerNodeId);
+      return {
+        ...rule,
+        scope,
+        ownerNodeId: ownerNodeId && nodeIds.has(ownerNodeId) ? ownerNodeId : null,
+        trigger: {
+          ...rule.trigger,
+          nodeId:
+            scope === 'scene' || !triggerNodeId || nodeIds.has(triggerNodeId)
+              ? triggerNodeId
+              : null,
+        },
+        actions: rule.actions.filter((action) => !action.targetId || nodeIds.has(action.targetId)),
+      };
+    })
+    .filter((rule) => rule.actions.length > 0);
+  return { ...scene, events };
+}
+
+function isEventRule(value: unknown): value is SceneEventRule {
+  if (!value || typeof value !== 'object') return false;
+  const rule = value as Partial<SceneEventRule>;
+  return Boolean(
+    typeof rule.id === 'string' &&
+    typeof rule.name === 'string' &&
+    rule.trigger &&
+    typeof rule.trigger === 'object' &&
+    typeof rule.trigger.type === 'string' &&
+    Array.isArray(rule.actions),
+  );
 }
 
 export function demoById(id: string): DemoProject | undefined {

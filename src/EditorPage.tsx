@@ -24,7 +24,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import SceneCanvas from './SceneCanvas';
+import SceneCanvas, { type CameraFocusRequest } from './SceneCanvas';
 import { demoSceneFor, upgradeDemoScene } from './demos';
 import {
   componentCatalog,
@@ -35,6 +35,11 @@ import {
   type Release,
   type RuntimeError,
   type SceneDocument,
+  type SceneEventAction,
+  type SceneEventActionType,
+  type SceneEventRule,
+  type SceneEventScope,
+  type SceneEventTriggerType,
   type SceneNode,
   type TransformMode,
 } from './types';
@@ -51,6 +56,36 @@ type Props = { project: ProjectMeta; onExit: () => void };
 
 const componentCategories = ['全部', '基础', '建筑', '工业', '能源', '数据', '系统'];
 
+const sceneTriggerLabels: Record<SceneEventTriggerType, string> = {
+  sceneLoad: '场景加载',
+  click: '任意对象点击',
+  doubleClick: '任意对象双击',
+  hover: '任意对象悬停',
+};
+const nodeTriggerLabels: Pick<
+  Record<SceneEventTriggerType, string>,
+  'click' | 'doubleClick' | 'hover'
+> = {
+  click: '点击',
+  doubleClick: '双击',
+  hover: '悬停',
+};
+const actionLabels: Record<SceneEventActionType, string> = {
+  focusCamera: '相机聚焦',
+  showPopup: '显示弹窗',
+  setColor: '设置颜色',
+  setVisibility: '显示/隐藏',
+};
+
+/** 兼容旧草稿：场景加载规则视为场景级，其余旧规则视为对象级。 */
+function getEventScope(rule: SceneEventRule): SceneEventScope {
+  return rule.scope ?? (rule.trigger.type === 'sceneLoad' ? 'scene' : 'node');
+}
+
+function getEventOwnerId(rule: SceneEventRule): string | null {
+  return rule.ownerNodeId ?? rule.trigger.nodeId ?? null;
+}
+
 export default function EditorPage({ project, onExit }: Props) {
   // 无草稿时以示例场景（或空场景）作为编辑起点。
   const initialScene = useMemo(() => demoSceneFor(project.id), [project.id]);
@@ -63,6 +98,7 @@ export default function EditorPage({ project, onExit }: Props) {
   const [query, setQuery] = useState('');
   const [bottomTab, setBottomTab] = useState<'timeline' | 'events'>('timeline');
   const [bottomOpen, setBottomOpen] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<'properties' | 'events'>('properties');
   const [showReleases, setShowReleases] = useState(false);
   const [releases, setReleases] = useState<Release[]>([]);
   const [runtimeErrors, setRuntimeErrors] = useState<RuntimeError[]>([]);
@@ -82,6 +118,12 @@ export default function EditorPage({ project, onExit }: Props) {
   const toastTimerRef = useRef<number | undefined>(undefined);
 
   const selected = scene.nodes.find((node) => node.id === selectedId) ?? null;
+  const allEvents = scene.events ?? [];
+  const sceneEvents = allEvents.filter((rule) => getEventScope(rule) === 'scene');
+  const objectEvents = allEvents.filter(
+    (rule) => getEventScope(rule) === 'node' && getEventOwnerId(rule) === selectedId,
+  );
+  const eventCount = objectEvents.length;
   const filtered = useMemo(
     () =>
       componentCatalog.filter(
@@ -200,6 +242,112 @@ export default function EditorPage({ project, onExit }: Props) {
     [updateScene],
   );
 
+  const addNodeEventRule = useCallback(() => {
+    const targetId = selectedIdRef.current ?? sceneRef.current.nodes[0]?.id ?? null;
+    const target = sceneRef.current.nodes.find((node) => node.id === targetId);
+    if (!targetId || !target) {
+      showToast('请先添加或选择一个场景对象，再创建事件');
+      return;
+    }
+    const rule: SceneEventRule = {
+      id: `event-${uid()}`,
+      name: `点击${target.name}显示信息`,
+      enabled: true,
+      scope: 'node',
+      ownerNodeId: targetId,
+      trigger: { type: 'click', nodeId: targetId },
+      actions: [
+        {
+          id: `action-${uid()}`,
+          type: 'showPopup',
+          targetId,
+          message: `${target.name}：请在这里配置业务说明。`,
+          color: '#ff6b6b',
+          visible: true,
+        },
+      ],
+    };
+    updateScene((current) => ({
+      ...current,
+      events: [...(current.events ?? []), rule],
+    }));
+    setInspectorTab('events');
+  }, [showToast, updateScene]);
+
+  const addSceneEventRule = useCallback(() => {
+    const target = sceneRef.current.nodes.find((node) =>
+      ['building', 'office', 'factory', 'warehouse'].includes(node.kind),
+    );
+    const action: SceneEventAction = target
+      ? {
+          id: `action-${uid()}`,
+          type: 'focusCamera',
+          targetId: target.id,
+        }
+      : {
+          id: `action-${uid()}`,
+          type: 'showPopup',
+          targetId: null,
+          message: '场景已加载，可以在这里配置全局说明。',
+        };
+    const rule: SceneEventRule = {
+      id: `event-${uid()}`,
+      name: '场景加载定位总览',
+      enabled: true,
+      scope: 'scene',
+      ownerNodeId: null,
+      trigger: { type: 'sceneLoad', nodeId: null },
+      actions: [action],
+    };
+    updateScene((current) => ({
+      ...current,
+      events: [...(current.events ?? []), rule],
+    }));
+    setBottomTab('events');
+    setBottomOpen(true);
+  }, [updateScene]);
+
+  const patchEventRule = useCallback(
+    (id: string, patch: Partial<SceneEventRule>) => {
+      updateScene((current) => ({
+        ...current,
+        events: (current.events ?? []).map((rule) =>
+          rule.id === id ? { ...rule, ...patch } : rule,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
+  const patchEventAction = useCallback(
+    (ruleId: string, actionId: string, patch: Partial<SceneEventAction>) => {
+      updateScene((current) => ({
+        ...current,
+        events: (current.events ?? []).map((rule) =>
+          rule.id === ruleId
+            ? {
+                ...rule,
+                actions: rule.actions.map((action) =>
+                  action.id === actionId ? { ...action, ...patch } : action,
+                ),
+              }
+            : rule,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
+  const deleteEventRule = useCallback(
+    (id: string) => {
+      updateScene((current) => ({
+        ...current,
+        events: (current.events ?? []).filter((rule) => rule.id !== id),
+      }));
+    },
+    [updateScene],
+  );
+
   const deleteSelected = useCallback(() => {
     const target = sceneRef.current.nodes.find((node) => node.id === selectedIdRef.current);
     if (!target) return;
@@ -221,6 +369,27 @@ export default function EditorPage({ project, onExit }: Props) {
     updateScene((current) => ({
       ...current,
       nodes: current.nodes.filter((node) => !removed.has(node.id)),
+      events: (current.events ?? [])
+        .map((rule) => ({
+          ...rule,
+          ownerNodeId:
+            getEventScope(rule) === 'node' && rule.ownerNodeId && removed.has(rule.ownerNodeId)
+              ? null
+              : rule.ownerNodeId,
+          trigger: {
+            ...rule.trigger,
+            nodeId:
+              rule.trigger.nodeId && removed.has(rule.trigger.nodeId) ? null : rule.trigger.nodeId,
+          },
+          actions: rule.actions.filter(
+            (action) => !action.targetId || !removed.has(action.targetId),
+          ),
+        }))
+        .filter(
+          (rule) =>
+            rule.actions.length > 0 &&
+            (getEventScope(rule) === 'scene' || getEventOwnerId(rule) !== null),
+        ),
     }));
     setSelectedId(null);
   }, [showToast, updateScene]);
@@ -436,9 +605,6 @@ export default function EditorPage({ project, onExit }: Props) {
             <Redo2 size={16} />
           </button>
           <span className="divider" />
-          <button className="tool-button" onClick={() => setBottomOpen(!bottomOpen)}>
-            <History size={15} /> 时间轴
-          </button>
           <button className="tool-button" onClick={() => setIsRuntime(true)}>
             <Play size={15} /> 预览
           </button>
@@ -596,6 +762,14 @@ export default function EditorPage({ project, onExit }: Props) {
               >
                 <Download size={15} />
               </button>
+              <span className="canvas-divider" />
+              <button
+                className="tool-button canvas-orchestration-button"
+                onClick={() => setBottomOpen(!bottomOpen)}
+              >
+                <History size={15} /> 场景编排{' '}
+                {sceneEvents.length > 0 ? `(${sceneEvents.length})` : ''}
+              </button>
             </div>
           </div>
           <div className="canvas-host">
@@ -623,7 +797,20 @@ export default function EditorPage({ project, onExit }: Props) {
               <div />
             </div>
           </div>
-          {bottomOpen && <BottomPanel tab={bottomTab} setTab={setBottomTab} />}
+          {bottomOpen && (
+            <BottomPanel
+              tab={bottomTab}
+              setTab={setBottomTab}
+              scope="scene"
+              nodes={scene.nodes}
+              selectedId={selectedId}
+              events={sceneEvents}
+              onAddEvent={addSceneEventRule}
+              onPatchRule={patchEventRule}
+              onPatchAction={patchEventAction}
+              onDeleteEvent={deleteEventRule}
+            />
+          )}
         </section>
         <aside className="right-panel">
           <div className="right-panel-head">
@@ -641,15 +828,38 @@ export default function EditorPage({ project, onExit }: Props) {
           {selected ? (
             <>
               <div className="inspector-tabs">
-                <button className="active">属性</button>
+                <button
+                  className={inspectorTab === 'properties' ? 'active' : ''}
+                  onClick={() => setInspectorTab('properties')}
+                >
+                  属性
+                </button>
                 <button disabled title="数据绑定规划中">
                   数据
                 </button>
-                <button disabled title="事件配置规划中">
-                  事件
+                <button
+                  className={inspectorTab === 'events' ? 'active' : ''}
+                  onClick={() => {
+                    setInspectorTab('events');
+                  }}
+                >
+                  对象事件 {eventCount ? eventCount : ''}
                 </button>
               </div>
-              <Inspector selected={selected} setNode={setNode} />
+              {inspectorTab === 'properties' ? (
+                <Inspector selected={selected} setNode={setNode} />
+              ) : (
+                <EventRuleList
+                  scope="node"
+                  nodes={scene.nodes}
+                  selectedId={selectedId}
+                  events={objectEvents}
+                  onAddEvent={addNodeEventRule}
+                  onPatchRule={patchEventRule}
+                  onPatchAction={patchEventAction}
+                  onDeleteEvent={deleteEventRule}
+                />
+              )}
             </>
           ) : (
             <div className="inspector-empty">
@@ -952,13 +1162,29 @@ function Inspector({
   );
 }
 
-/** 底部时间轴/事件区：当前为占位视图，动画编排与事件规则将在后续迭代实现。 */
+/** 底部场景编排区：时间轴和场景级事件都作用于整个画布。 */
 function BottomPanel({
   tab,
   setTab,
+  scope,
+  nodes,
+  selectedId,
+  events,
+  onAddEvent,
+  onPatchRule,
+  onPatchAction,
+  onDeleteEvent,
 }: {
   tab: 'timeline' | 'events';
   setTab: (tab: 'timeline' | 'events') => void;
+  scope: SceneEventScope;
+  nodes: SceneNode[];
+  selectedId: string | null;
+  events: SceneEventRule[];
+  onAddEvent: () => void;
+  onPatchRule: (id: string, patch: Partial<SceneEventRule>) => void;
+  onPatchAction: (ruleId: string, actionId: string, patch: Partial<SceneEventAction>) => void;
+  onDeleteEvent: (id: string) => void;
 }) {
   return (
     <div className="bottom-panel">
@@ -966,14 +1192,16 @@ function BottomPanel({
         <div className="bottom-tabs">
           <button className={tab === 'timeline' ? 'active' : ''} onClick={() => setTab('timeline')}>
             <History size={14} />
-            时间轴
+            场景时间轴
           </button>
           <button className={tab === 'events' ? 'active' : ''} onClick={() => setTab('events')}>
             <Zap size={14} />
-            事件
+            场景事件
           </button>
         </div>
-        <span className="muted-text">动画编排 · 规划中（当前为占位视图）</span>
+        <span className="muted-text">
+          {tab === 'events' ? `场景事件规则 ${events.length} 条` : '动画编排 · 后续迭代'}
+        </span>
       </div>
       {tab === 'timeline' ? (
         <div className="timeline">
@@ -991,27 +1219,376 @@ function BottomPanel({
           </div>
           <div className="timeline-empty">
             <Sparkles size={18} />
-            拖入关键帧或选择对象开始创建动画
+            时间轴用于后续配置对象移动、变色、显隐等关键帧动画
           </div>
         </div>
       ) : (
         <div className="event-list">
-          <div className="event-row">
-            <span className="event-dot blue" />
-            <strong>点击</strong>
-            <span>→ 相机聚焦</span>
-            <span className="event-enabled">示例</span>
+          <div className="event-toolbar">
+            <span>场景级规则在预览中按场景加载或全局触发条件执行</span>
+            <button className="add-event" onClick={onAddEvent}>
+              <Zap size={14} />
+              添加场景事件
+            </button>
           </div>
-          <div className="event-row">
-            <span className="event-dot amber" />
-            <strong>数据变化</strong>
-            <span>→ 更新颜色</span>
-            <span className="event-enabled">示例</span>
-          </div>
-          <button className="add-event" disabled title="事件规则配置将在后续迭代提供">
-            <Zap size={14} />
-            添加事件规则
-          </button>
+          {events.length ? (
+            <div className="event-rule-list">
+              {events.map((rule) => {
+                const action = rule.actions[0] ?? {
+                  id: `action-${rule.id}`,
+                  type: 'showPopup' as SceneEventActionType,
+                  targetId: rule.trigger.nodeId,
+                };
+                return (
+                  <div className="event-rule-card" key={rule.id}>
+                    <div className="event-rule-head">
+                      <label className="event-enable">
+                        <input
+                          type="checkbox"
+                          checked={rule.enabled}
+                          onChange={(event) =>
+                            onPatchRule(rule.id, { enabled: event.target.checked })
+                          }
+                        />
+                        启用
+                      </label>
+                      <input
+                        aria-label="事件名称"
+                        value={rule.name}
+                        onChange={(event) => onPatchRule(rule.id, { name: event.target.value })}
+                      />
+                      <button className="icon-button" onClick={() => onDeleteEvent(rule.id)}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    <div className="event-form-grid">
+                      <label>
+                        触发方式
+                        <select
+                          value={rule.trigger.type}
+                          onChange={(event) =>
+                            onPatchRule(rule.id, {
+                              trigger: {
+                                ...rule.trigger,
+                                type: event.target.value as SceneEventTriggerType,
+                              },
+                            })
+                          }
+                        >
+                          {Object.entries(
+                            scope === 'scene' ? sceneTriggerLabels : nodeTriggerLabels,
+                          ).map(([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        触发对象
+                        <select
+                          value={rule.trigger.nodeId ?? ''}
+                          disabled={rule.trigger.type === 'sceneLoad'}
+                          onChange={(event) =>
+                            onPatchRule(rule.id, {
+                              trigger: { ...rule.trigger, nodeId: event.target.value || null },
+                            })
+                          }
+                        >
+                          <option value="">全场景</option>
+                          {nodes.map((node) => (
+                            <option key={node.id} value={node.id}>
+                              {node.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        执行动作
+                        <select
+                          value={action.type}
+                          onChange={(event) =>
+                            onPatchAction(rule.id, action.id, {
+                              type: event.target.value as SceneEventActionType,
+                            })
+                          }
+                        >
+                          {Object.entries(actionLabels).map(([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        动作对象
+                        <select
+                          value={action.targetId ?? ''}
+                          onChange={(event) =>
+                            onPatchAction(rule.id, action.id, {
+                              targetId: event.target.value || null,
+                            })
+                          }
+                        >
+                          <option value="">同触发对象</option>
+                          {nodes.map((node) => (
+                            <option key={node.id} value={node.id}>
+                              {node.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {action.type === 'showPopup' && (
+                        <label className="event-form-wide">
+                          弹窗内容
+                          <input
+                            value={action.message ?? ''}
+                            onChange={(event) =>
+                              onPatchAction(rule.id, action.id, { message: event.target.value })
+                            }
+                          />
+                        </label>
+                      )}
+                      {action.type === 'setColor' && (
+                        <label>
+                          目标颜色
+                          <input
+                            type="color"
+                            value={action.color ?? '#ff6b6b'}
+                            onChange={(event) =>
+                              onPatchAction(rule.id, action.id, { color: event.target.value })
+                            }
+                          />
+                        </label>
+                      )}
+                      {action.type === 'setVisibility' && (
+                        <label>
+                          可见状态
+                          <select
+                            value={String(action.visible ?? true)}
+                            onChange={(event) =>
+                              onPatchAction(rule.id, action.id, {
+                                visible: event.target.value === 'true',
+                              })
+                            }
+                          >
+                            <option value="true">显示</option>
+                            <option value="false">隐藏</option>
+                          </select>
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="timeline-empty">
+              <Sparkles size={18} />
+              点击“添加场景事件”配置场景加载后的相机定位或全局动作
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 对象事件面板：只展示当前选中节点归属的规则，避免与场景级规则混在一起。 */
+function EventRuleList({
+  scope,
+  nodes,
+  selectedId,
+  events,
+  onAddEvent,
+  onPatchRule,
+  onPatchAction,
+  onDeleteEvent,
+}: {
+  scope: SceneEventScope;
+  nodes: SceneNode[];
+  selectedId: string | null;
+  events: SceneEventRule[];
+  onAddEvent: () => void;
+  onPatchRule: (id: string, patch: Partial<SceneEventRule>) => void;
+  onPatchAction: (ruleId: string, actionId: string, patch: Partial<SceneEventAction>) => void;
+  onDeleteEvent: (id: string) => void;
+}) {
+  const selectedName = nodes.find((node) => node.id === selectedId)?.name ?? '当前对象';
+  const labels = scope === 'scene' ? sceneTriggerLabels : nodeTriggerLabels;
+  return (
+    <div className="object-event-panel">
+      <div className="event-toolbar">
+        <span>
+          {scope === 'scene'
+            ? '场景级规则作用于整个画布，可控制相机或多个对象'
+            : `${selectedName} 的点击、双击和悬停交互`}
+        </span>
+        <button className="add-event" onClick={onAddEvent}>
+          <Zap size={14} />
+          {scope === 'scene' ? '添加场景事件' : '添加对象事件'}
+        </button>
+      </div>
+      {events.length ? (
+        <div className="event-rule-list">
+          {events.map((rule) => {
+            const action = rule.actions[0] ?? {
+              id: `action-${rule.id}`,
+              type: 'showPopup' as SceneEventActionType,
+              targetId: rule.trigger.nodeId ?? rule.ownerNodeId,
+            };
+            const triggerNodeId = rule.trigger.nodeId ?? rule.ownerNodeId;
+            return (
+              <div className="event-rule-card" key={rule.id}>
+                <div className="event-rule-head">
+                  <label className="event-enable">
+                    <input
+                      type="checkbox"
+                      checked={rule.enabled}
+                      onChange={(event) => onPatchRule(rule.id, { enabled: event.target.checked })}
+                    />
+                    启用
+                  </label>
+                  <input
+                    aria-label="事件名称"
+                    value={rule.name}
+                    onChange={(event) => onPatchRule(rule.id, { name: event.target.value })}
+                  />
+                  <button
+                    className="icon-button"
+                    title="删除事件"
+                    onClick={() => onDeleteEvent(rule.id)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <div className="event-form-grid">
+                  <label>
+                    触发方式
+                    <select
+                      value={rule.trigger.type}
+                      onChange={(event) =>
+                        onPatchRule(rule.id, {
+                          trigger: {
+                            ...rule.trigger,
+                            type: event.target.value as SceneEventTriggerType,
+                            nodeId: event.target.value === 'sceneLoad' ? null : rule.trigger.nodeId,
+                          },
+                        })
+                      }
+                    >
+                      {Object.entries(labels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    触发对象
+                    <select
+                      value={triggerNodeId ?? ''}
+                      disabled={scope === 'node' || rule.trigger.type === 'sceneLoad'}
+                      onChange={(event) =>
+                        onPatchRule(rule.id, {
+                          trigger: { ...rule.trigger, nodeId: event.target.value || null },
+                        })
+                      }
+                    >
+                      <option value="">{scope === 'scene' ? '整个场景' : selectedName}</option>
+                      {scope === 'scene' &&
+                        nodes.map((node) => (
+                          <option key={node.id} value={node.id}>
+                            {node.name}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label>
+                    执行动作
+                    <select
+                      value={action.type}
+                      onChange={(event) =>
+                        onPatchAction(rule.id, action.id, {
+                          type: event.target.value as SceneEventActionType,
+                        })
+                      }
+                    >
+                      {Object.entries(actionLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    动作对象
+                    <select
+                      value={action.targetId ?? ''}
+                      onChange={(event) =>
+                        onPatchAction(rule.id, action.id, {
+                          targetId: event.target.value || null,
+                        })
+                      }
+                    >
+                      <option value="">同触发对象</option>
+                      {nodes.map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {node.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {action.type === 'showPopup' && (
+                    <label className="event-form-wide">
+                      弹窗内容
+                      <input
+                        value={action.message ?? ''}
+                        onChange={(event) =>
+                          onPatchAction(rule.id, action.id, { message: event.target.value })
+                        }
+                      />
+                    </label>
+                  )}
+                  {action.type === 'setColor' && (
+                    <label>
+                      目标颜色
+                      <input
+                        type="color"
+                        value={action.color ?? '#ff6b6b'}
+                        onChange={(event) =>
+                          onPatchAction(rule.id, action.id, { color: event.target.value })
+                        }
+                      />
+                    </label>
+                  )}
+                  {action.type === 'setVisibility' && (
+                    <label>
+                      可见状态
+                      <select
+                        value={String(action.visible ?? true)}
+                        onChange={(event) =>
+                          onPatchAction(rule.id, action.id, {
+                            visible: event.target.value === 'true',
+                          })
+                        }
+                      >
+                        <option value="true">显示</option>
+                        <option value="false">隐藏</option>
+                      </select>
+                    </label>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="timeline-empty">
+          <Sparkles size={18} />
+          {scope === 'scene'
+            ? '暂无场景事件，点击“添加场景事件”创建全局规则'
+            : '暂无对象事件，点击“添加对象事件”配置当前对象交互'}
         </div>
       )}
     </div>
@@ -1039,6 +1616,92 @@ function RuntimeView({
     ],
   };
   const today = new Date().toLocaleDateString('zh-CN');
+  const [runtimeOverrides, setRuntimeOverrides] = useState<
+    Record<string, Partial<Pick<SceneNode, 'color' | 'visible' | 'opacity'>>>
+  >({});
+  const [focusRequest, setFocusRequest] = useState<CameraFocusRequest | null>(null);
+  const [runtimePopup, setRuntimePopup] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
+  const nodeById = useMemo(
+    () => new Map(scene.nodes.map((node) => [node.id, node])),
+    [scene.nodes],
+  );
+
+  const runRule = useCallback(
+    (rule: SceneEventRule) => {
+      if (!rule.enabled) return;
+      rule.actions.forEach((action) => {
+        const targetId = action.targetId ?? rule.trigger.nodeId;
+        const target = targetId ? nodeById.get(targetId) : null;
+        if (
+          (action.type === 'focusCamera' ||
+            action.type === 'setColor' ||
+            action.type === 'setVisibility') &&
+          !targetId
+        ) {
+          onError(`事件「${rule.name}」缺少动作对象`);
+          return;
+        }
+        if (action.type === 'focusCamera' && targetId) {
+          setFocusRequest({ nodeId: targetId, nonce: Date.now() });
+          return;
+        }
+        if (action.type === 'showPopup') {
+          setRuntimePopup({
+            title: target?.name ?? rule.name,
+            message: action.message?.trim() || `${target?.name ?? '当前对象'} 已触发事件`,
+          });
+          return;
+        }
+        if (action.type === 'setColor' && targetId) {
+          setRuntimeOverrides((current) => ({
+            ...current,
+            [targetId]: { ...current[targetId], color: action.color ?? '#ff6b6b' },
+          }));
+          return;
+        }
+        if (action.type === 'setVisibility' && targetId) {
+          setRuntimeOverrides((current) => ({
+            ...current,
+            [targetId]: { ...current[targetId], visible: action.visible ?? true },
+          }));
+        }
+      });
+    },
+    [nodeById, onError],
+  );
+
+  const runTrigger = useCallback(
+    (type: SceneEventTriggerType, nodeId: string | null) => {
+      (scene.events ?? [])
+        .filter((rule) => {
+          if (!rule.enabled || rule.trigger.type !== type) return false;
+          const scope = getEventScope(rule);
+          if (type === 'sceneLoad') return scope === 'scene';
+          if (scope === 'node') {
+            const ownerId = getEventOwnerId(rule);
+            return ownerId === nodeId && rule.trigger.nodeId === nodeId;
+          }
+          // 场景级规则可以选择“整个场景”或指定对象作为触发来源。
+          return !rule.trigger.nodeId || rule.trigger.nodeId === nodeId;
+        })
+        .forEach(runRule);
+    },
+    [runRule, scene.events],
+  );
+
+  useEffect(() => {
+    setRuntimeOverrides({});
+    setRuntimePopup(null);
+    setFocusRequest(null);
+  }, [scene]);
+
+  useEffect(() => {
+    runTrigger('sceneLoad', null);
+  }, [runTrigger]);
+
   return (
     <div className="runtime-shell">
       <header className="runtime-head">
@@ -1062,7 +1725,14 @@ function RuntimeView({
           nodes={scene.nodes}
           selectedId={null}
           readOnly
+          runtimeOverrides={runtimeOverrides}
+          focusRequest={focusRequest}
           onSelect={() => undefined}
+          onNodeClick={(nodeId) => runTrigger('click', nodeId)}
+          onNodeDoubleClick={(nodeId) => runTrigger('doubleClick', nodeId)}
+          onNodeHover={(nodeId) => {
+            if (nodeId) runTrigger('hover', nodeId);
+          }}
           onRuntimeError={onError}
         />
         <div className="runtime-overlay">
@@ -1072,6 +1742,15 @@ function RuntimeView({
             <p>
               {theme.tagline} · {today}
             </p>
+          </div>
+          <div className="runtime-event-tip">
+            场景事件{' '}
+            {scene.events?.filter((rule) => rule.enabled && getEventScope(rule) === 'scene')
+              .length ?? 0}{' '}
+            条，对象交互事件{' '}
+            {scene.events?.filter((rule) => rule.enabled && getEventScope(rule) === 'node')
+              .length ?? 0}{' '}
+            条
           </div>
           <div className="metric-cards">
             {theme.metrics.map((metric) => (
@@ -1083,6 +1762,20 @@ function RuntimeView({
             ))}
           </div>
         </div>
+        {runtimePopup && (
+          <div className="runtime-popup">
+            <button
+              className="icon-button"
+              onClick={() => setRuntimePopup(null)}
+              aria-label="关闭弹窗"
+            >
+              <X size={15} />
+            </button>
+            <span className="eyebrow">EVENT POPUP</span>
+            <strong>{runtimePopup.title}</strong>
+            <p>{runtimePopup.message}</p>
+          </div>
+        )}
       </div>
     </div>
   );

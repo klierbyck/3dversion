@@ -5,13 +5,19 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import type { NodeKind, SceneNode, TransformMode } from './types';
 
 type TransformPatch = Pick<SceneNode, 'position' | 'rotation' | 'scale'>;
+export type CameraFocusRequest = { nodeId: string; nonce: number };
 type Props = {
   nodes: SceneNode[];
   selectedId: string | null;
   mode?: TransformMode;
   gridVisible?: boolean;
   readOnly?: boolean;
+  runtimeOverrides?: Record<string, Partial<Pick<SceneNode, 'color' | 'visible' | 'opacity'>>>;
+  focusRequest?: CameraFocusRequest | null;
   onSelect: (id: string | null) => void;
+  onNodeClick?: (id: string) => void;
+  onNodeDoubleClick?: (id: string) => void;
+  onNodeHover?: (id: string | null) => void;
   onDropKind?: (kind: NodeKind, position: [number, number, number]) => void;
   onTransform?: (id: string, patch: TransformPatch, finished: boolean) => void;
   onTransformStart?: () => void;
@@ -24,7 +30,12 @@ export default function SceneCanvas({
   mode = 'translate',
   gridVisible = true,
   readOnly = false,
+  runtimeOverrides = {},
+  focusRequest = null,
   onSelect,
+  onNodeClick,
+  onNodeDoubleClick,
+  onNodeHover,
   onDropKind,
   onTransform,
   onTransformStart,
@@ -39,6 +50,7 @@ export default function SceneCanvas({
   const gridRef = useRef<THREE.GridHelper>();
   const objectsRef = useRef(new Map<string, THREE.Object3D>());
   const selectedIdRef = useRef(selectedId);
+  const hoveredIdRef = useRef<string | null>(null);
   const transformCallbacksRef = useRef({ onTransform, onTransformStart });
 
   useEffect(() => {
@@ -152,6 +164,8 @@ export default function SceneCanvas({
         observer.disconnect();
         orbit.dispose();
         transform.dispose();
+        // 路由切换或预览退出时主动释放 WebGL 上下文，避免多次打开 Demo 后触发浏览器上下文上限警告。
+        renderer.forceContextLoss();
         renderer.dispose();
         objectsRef.current.forEach(disposeObject);
         objectsRef.current.clear();
@@ -196,20 +210,40 @@ export default function SceneCanvas({
         ...(node.rotation.map(THREE.MathUtils.degToRad) as [number, number, number]),
       );
       object.scale.set(...node.scale);
-      object.visible = node.visible;
+      const override = runtimeOverrides[node.id];
+      const effectiveColor = override?.color ?? node.color;
+      const effectiveOpacity = override?.opacity ?? node.opacity;
+      object.visible = override?.visible ?? node.visible;
       object.traverse((child) => {
         if (!(child instanceof THREE.Mesh)) return;
         child.castShadow = node.kind !== 'road' && node.kind !== 'plane';
         child.receiveShadow = true;
         if (child.userData.tintable && child.material instanceof THREE.MeshStandardMaterial) {
-          child.material.color.set(node.color ?? '#34d399');
-          child.material.opacity = node.opacity ?? 1;
-          child.material.transparent = (node.opacity ?? 1) < 1;
+          child.material.color.set(effectiveColor ?? '#34d399');
+          child.material.opacity = effectiveOpacity ?? 1;
+          child.material.transparent = (effectiveOpacity ?? 1) < 1;
         }
       });
       if (node.kind === 'bar') object.scale.y = Math.max(0.15, (node.value ?? 50) / 50);
     });
-  }, [nodes]);
+  }, [nodes, runtimeOverrides]);
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    const object = objectsRef.current.get(focusRequest.nodeId);
+    const camera = cameraRef.current;
+    const orbit = orbitRef.current;
+    if (!object || !camera || !orbit) return;
+    const bounds = new THREE.Box3().setFromObject(object);
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = Math.max(bounds.getSize(new THREE.Vector3()).length(), 4);
+    // 运行态事件聚焦：相机移动到目标斜上方，Orbit 目标对准节点中心，确保用户能看到触发对象。
+    orbit.target.copy(center);
+    camera.position.set(center.x + size * 1.2, center.y + size * 0.8, center.z + size * 1.2);
+    camera.lookAt(center);
+    camera.updateProjectionMatrix();
+    orbit.update();
+  }, [focusRequest]);
 
   const selectedLocked = nodes.find((item) => item.id === selectedId)?.locked ?? false;
   useEffect(() => {
@@ -228,26 +262,44 @@ export default function SceneCanvas({
     const onPointerDown = (event: PointerEvent) => {
       pointerDown = [event.clientX, event.clientY];
     };
+    const hitTest = (event: MouseEvent | PointerEvent) => {
+      const pointer = pointerFromEvent(event, renderer.domElement);
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects([...objectsRef.current.values()], true);
+      return hits.map((hit) => findNodeId(hit.object)).find(Boolean) ?? null;
+    };
     const onClick = (event: MouseEvent) => {
       if (
         Math.hypot(event.clientX - pointerDown[0], event.clientY - pointerDown[1]) > 4 ||
         transformRef.current?.dragging
       )
         return;
-      const pointer = pointerFromEvent(event, renderer.domElement);
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(pointer, camera);
-      const hits = raycaster.intersectObjects([...objectsRef.current.values()], true);
-      const id = hits.map((hit) => findNodeId(hit.object)).find(Boolean) ?? null;
+      const id = hitTest(event);
       onSelect(id);
+      if (id) onNodeClick?.(id);
+    };
+    const onDoubleClick = (event: MouseEvent) => {
+      const id = hitTest(event);
+      if (id) onNodeDoubleClick?.(id);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      const id = hitTest(event);
+      if (id === hoveredIdRef.current) return;
+      hoveredIdRef.current = id;
+      onNodeHover?.(id);
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('click', onClick);
+    renderer.domElement.addEventListener('dblclick', onDoubleClick);
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
     return () => {
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('click', onClick);
+      renderer.domElement.removeEventListener('dblclick', onDoubleClick);
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
     };
-  }, [onSelect]);
+  }, [onNodeClick, onNodeDoubleClick, onNodeHover, onSelect]);
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();

@@ -45,7 +45,41 @@ export type SceneNode = {
   assetPath?: string;
 };
 
-export type SceneDocument = { schemaVersion: string; nodes: SceneNode[] };
+export type SceneEventTriggerType = 'click' | 'doubleClick' | 'hover' | 'sceneLoad';
+export type SceneEventActionType = 'focusCamera' | 'showPopup' | 'setColor' | 'setVisibility';
+/** 事件归属范围：场景级规则由场景编排面板管理，对象级规则由选中对象管理。 */
+export type SceneEventScope = 'scene' | 'node';
+
+export type SceneEventAction = {
+  id: string;
+  type: SceneEventActionType;
+  targetId: string | null;
+  message?: string;
+  color?: string;
+  visible?: boolean;
+};
+
+export type SceneEventRule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** 规则的管理范围；旧草稿缺少该字段时由读取层按触发方式迁移。 */
+  scope: SceneEventScope;
+  /** 对象级规则的归属节点，场景级规则固定为空。 */
+  ownerNodeId: string | null;
+  trigger: {
+    type: SceneEventTriggerType;
+    nodeId: string | null;
+  };
+  actions: SceneEventAction[];
+};
+
+export type SceneDocument = {
+  schemaVersion: string;
+  nodes: SceneNode[];
+  /** 事件规则：用于运行态点击/悬停/加载后触发相机聚焦、弹窗、变色、显隐等动作。 */
+  events?: SceneEventRule[];
+};
 export type Release = {
   id: string;
   version: string;

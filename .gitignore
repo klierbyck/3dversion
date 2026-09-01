@@ -8,3 +8,21 @@ __pycache__/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+
+# Playwright / 浏览器自动化临时产物
+.playwright-cli/
+playwright-report/
+test-results/
+
+# 测试覆盖率与 Python 工具缓存
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地日志和系统临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

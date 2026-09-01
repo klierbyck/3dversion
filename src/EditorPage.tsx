@@ -11,7 +11,9 @@ import {
   History,
   MousePointer2,
   Package,
+  Pause,
   Play,
+  Plus,
   Redo2,
   Rotate3d,
   Search,
@@ -40,6 +42,8 @@ import {
   type SceneEventRule,
   type SceneEventScope,
   type SceneEventTriggerType,
+  type SceneTimeline,
+  type SceneTimelineProperty,
   type SceneNode,
   type TransformMode,
 } from './types';
@@ -51,6 +55,13 @@ import {
   reportRuntimeError,
   saveDraft,
 } from './api';
+import {
+  applyCameraTimeline,
+  applyTimeline,
+  formatTimelineTime,
+  normalizeTimeline,
+  propertyValue,
+} from './timeline';
 
 type Props = { project: ProjectMeta; onExit: () => void };
 
@@ -76,6 +87,14 @@ const actionLabels: Record<SceneEventActionType, string> = {
   setColor: '设置颜色',
   setVisibility: '显示/隐藏',
 };
+const timelinePropertyLabels: Record<SceneTimelineProperty, string> = {
+  position: '位置',
+  rotation: '旋转',
+  scale: '缩放',
+  color: '颜色',
+  opacity: '透明度',
+  visible: '显隐',
+};
 
 /** 兼容旧草稿：场景加载规则视为场景级，其余旧规则视为对象级。 */
 function getEventScope(rule: SceneEventRule): SceneEventScope {
@@ -98,6 +117,8 @@ export default function EditorPage({ project, onExit }: Props) {
   const [query, setQuery] = useState('');
   const [bottomTab, setBottomTab] = useState<'timeline' | 'events'>('timeline');
   const [bottomOpen, setBottomOpen] = useState(false);
+  const [timelineTime, setTimelineTime] = useState(0);
+  const [timelinePlaying, setTimelinePlaying] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<'properties' | 'events'>('properties');
   const [showReleases, setShowReleases] = useState(false);
   const [releases, setReleases] = useState<Release[]>([]);
@@ -124,6 +145,9 @@ export default function EditorPage({ project, onExit }: Props) {
     (rule) => getEventScope(rule) === 'node' && getEventOwnerId(rule) === selectedId,
   );
   const eventCount = objectEvents.length;
+  const timeline = useMemo(() => normalizeTimeline(scene.timeline), [scene.timeline]);
+  const canvasNodes = useMemo(() => applyTimeline(scene, timelineTime), [scene, timelineTime]);
+  const cameraView = useMemo(() => applyCameraTimeline(scene, timelineTime), [scene, timelineTime]);
   const filtered = useMemo(
     () =>
       componentCatalog.filter(
@@ -140,6 +164,30 @@ export default function EditorPage({ project, onExit }: Props) {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
   }, []);
   useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+
+  useEffect(() => {
+    if (!timelinePlaying || !timeline.keyframes.length) return;
+    let frame = 0;
+    let previous = performance.now();
+    const tick = (now: number) => {
+      const delta = (now - previous) / 1000;
+      previous = now;
+      setTimelineTime((current) => {
+        const next = current + delta;
+        if (next < timeline.duration) return next;
+        if (timeline.loop) return next % timeline.duration;
+        setTimelinePlaying(false);
+        return timeline.duration;
+      });
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [timeline.duration, timeline.keyframes.length, timeline.loop, timelinePlaying]);
+
+  useEffect(() => {
+    setTimelineTime((current) => Math.min(current, timeline.duration));
+  }, [timeline.duration]);
 
   /** 将 next 场景提交为当前状态（同步维护 sceneRef）。 */
   const commitScene = useCallback((next: SceneDocument) => {
@@ -344,6 +392,76 @@ export default function EditorPage({ project, onExit }: Props) {
         ...current,
         events: (current.events ?? []).filter((rule) => rule.id !== id),
       }));
+    },
+    [updateScene],
+  );
+
+  const patchTimeline = useCallback(
+    (patch: Partial<Pick<SceneTimeline, 'duration' | 'loop'>>) => {
+      updateScene((current) => ({
+        ...current,
+        timeline: normalizeTimeline({
+          ...normalizeTimeline(current.timeline),
+          ...patch,
+        }),
+      }));
+    },
+    [updateScene],
+  );
+
+  const addKeyframe = useCallback(
+    (property: SceneTimelineProperty) => {
+      const node = sceneRef.current.nodes.find((item) => item.id === selectedIdRef.current);
+      if (!node) {
+        showToast('请先选择一个场景对象，再添加关键帧');
+        return;
+      }
+      updateScene((current) => {
+        const currentTimeline = normalizeTimeline(current.timeline);
+        const time = Math.min(timelineTime, currentTimeline.duration);
+        const existing = currentTimeline.keyframes.find(
+          (frame) =>
+            frame.nodeId === node.id &&
+            frame.property === property &&
+            Math.abs(frame.time - time) < 0.01,
+        );
+        const keyframe = {
+          id: existing?.id ?? `keyframe-${uid()}`,
+          nodeId: node.id,
+          time,
+          property,
+          value: propertyValue(node, property),
+        };
+        return {
+          ...current,
+          timeline: {
+            ...currentTimeline,
+            keyframes: [
+              ...currentTimeline.keyframes.filter((frame) => frame.id !== existing?.id),
+              keyframe,
+            ].sort((a, b) => a.time - b.time),
+          },
+        };
+      });
+      showToast(
+        `已在 ${formatTimelineTime(timelineTime)} 添加${timelinePropertyLabels[property]}关键帧`,
+      );
+    },
+    [showToast, timelineTime, updateScene],
+  );
+
+  const deleteKeyframe = useCallback(
+    (id: string) => {
+      updateScene((current) => {
+        const currentTimeline = normalizeTimeline(current.timeline);
+        return {
+          ...current,
+          timeline: {
+            ...currentTimeline,
+            keyframes: currentTimeline.keyframes.filter((frame) => frame.id !== id),
+          },
+        };
+      });
     },
     [updateScene],
   );
@@ -774,7 +892,8 @@ export default function EditorPage({ project, onExit }: Props) {
           </div>
           <div className="canvas-host">
             <SceneCanvas
-              nodes={scene.nodes}
+              nodes={canvasNodes}
+              cameraView={cameraView}
               selectedId={selectedId}
               mode={transformMode}
               gridVisible={gridVisible}
@@ -809,6 +928,14 @@ export default function EditorPage({ project, onExit }: Props) {
               onPatchRule={patchEventRule}
               onPatchAction={patchEventAction}
               onDeleteEvent={deleteEventRule}
+              timeline={timeline}
+              timelineTime={timelineTime}
+              timelinePlaying={timelinePlaying}
+              onTimelineTimeChange={setTimelineTime}
+              onTimelinePlayingChange={setTimelinePlaying}
+              onPatchTimeline={patchTimeline}
+              onAddKeyframe={addKeyframe}
+              onDeleteKeyframe={deleteKeyframe}
             />
           )}
         </section>
@@ -1174,6 +1301,14 @@ function BottomPanel({
   onPatchRule,
   onPatchAction,
   onDeleteEvent,
+  timeline,
+  timelineTime,
+  timelinePlaying,
+  onTimelineTimeChange,
+  onTimelinePlayingChange,
+  onPatchTimeline,
+  onAddKeyframe,
+  onDeleteKeyframe,
 }: {
   tab: 'timeline' | 'events';
   setTab: (tab: 'timeline' | 'events') => void;
@@ -1185,7 +1320,18 @@ function BottomPanel({
   onPatchRule: (id: string, patch: Partial<SceneEventRule>) => void;
   onPatchAction: (ruleId: string, actionId: string, patch: Partial<SceneEventAction>) => void;
   onDeleteEvent: (id: string) => void;
+  timeline: SceneTimeline;
+  timelineTime: number;
+  timelinePlaying: boolean;
+  onTimelineTimeChange: (time: number) => void;
+  onTimelinePlayingChange: (playing: boolean) => void;
+  onPatchTimeline: (patch: Partial<Pick<SceneTimeline, 'duration' | 'loop'>>) => void;
+  onAddKeyframe: (property: SceneTimelineProperty) => void;
+  onDeleteKeyframe: (id: string) => void;
 }) {
+  const [timelineProperty, setTimelineProperty] = useState<SceneTimelineProperty>('position');
+  const selectedName = nodes.find((node) => node.id === selectedId)?.name ?? null;
+  const selectedFrames = timeline.keyframes.filter((frame) => frame.nodeId === selectedId);
   return (
     <div className="bottom-panel">
       <div className="bottom-head">
@@ -1200,26 +1346,129 @@ function BottomPanel({
           </button>
         </div>
         <span className="muted-text">
-          {tab === 'events' ? `场景事件规则 ${events.length} 条` : '动画编排 · 后续迭代'}
+          {tab === 'events'
+            ? `场景事件规则 ${events.length} 条`
+            : `关键帧 ${timeline.keyframes.length} 个 · ${timeline.duration.toFixed(1)} 秒`}
         </span>
       </div>
       {tab === 'timeline' ? (
         <div className="timeline">
           <div className="timeline-controls">
-            <button className="play-button" disabled title="动画播放将在后续迭代提供">
-              <Play size={14} />
+            <button
+              className="play-button"
+              disabled={!timeline.keyframes.length}
+              title={timelinePlaying ? '暂停时间轴' : '播放时间轴'}
+              onClick={() => onTimelinePlayingChange(!timelinePlaying)}
+            >
+              {timelinePlaying ? <Pause size={14} /> : <Play size={14} />}
             </button>
-            <span>00:00.00</span>
-            <div className="timeline-track">
-              <i />
-              <i />
-              <i />
+            <span>{formatTimelineTime(timelineTime)}</span>
+            <div className="timeline-track timeline-track-live">
+              <input
+                aria-label="时间轴播放位置"
+                type="range"
+                min="0"
+                max={timeline.duration}
+                step="0.01"
+                value={timelineTime}
+                onChange={(event) => {
+                  onTimelinePlayingChange(false);
+                  onTimelineTimeChange(Number(event.target.value));
+                }}
+              />
+              <div
+                className="timeline-playhead"
+                style={{ left: `${(timelineTime / timeline.duration) * 100}%` }}
+              />
+              {timeline.keyframes.map((frame) => (
+                <button
+                  key={frame.id}
+                  className={`timeline-marker ${frame.nodeId === selectedId ? 'selected' : ''}`}
+                  style={{ left: `${(frame.time / timeline.duration) * 100}%` }}
+                  title={`${nodes.find((node) => node.id === frame.nodeId)?.name ?? '未知对象'} · ${timelinePropertyLabels[frame.property]} · ${formatTimelineTime(frame.time)}`}
+                  onClick={() => {
+                    onTimelinePlayingChange(false);
+                    onTimelineTimeChange(frame.time);
+                  }}
+                />
+              ))}
             </div>
-            <span>00:15.00</span>
+            <span>{formatTimelineTime(timeline.duration)}</span>
+            <label className="timeline-duration">
+              时长
+              <input
+                aria-label="场景时长"
+                type="number"
+                min="1"
+                max="3600"
+                step="1"
+                value={timeline.duration}
+                onChange={(event) => onPatchTimeline({ duration: Number(event.target.value) })}
+              />
+            </label>
+            <label className="timeline-loop">
+              <input
+                type="checkbox"
+                checked={timeline.loop}
+                onChange={(event) => onPatchTimeline({ loop: event.target.checked })}
+              />
+              循环
+            </label>
           </div>
-          <div className="timeline-empty">
-            <Sparkles size={18} />
-            时间轴用于后续配置对象移动、变色、显隐等关键帧动画
+          <div className="timeline-editor-row">
+            <div className="timeline-object">
+              <strong>{selectedName ?? '未选择对象'}</strong>
+              <span>
+                {selectedName
+                  ? `当前对象关键帧 ${selectedFrames.length} 个`
+                  : '请在画布或场景树中选择对象'}
+              </span>
+            </div>
+            <select
+              aria-label="关键帧属性"
+              value={timelineProperty}
+              onChange={(event) => setTimelineProperty(event.target.value as SceneTimelineProperty)}
+            >
+              {Object.entries(timelinePropertyLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <button
+              className="add-keyframe"
+              disabled={!selectedId}
+              onClick={() => onAddKeyframe(timelineProperty)}
+            >
+              <Plus size={14} />
+              在当前时间添加关键帧
+            </button>
+            <div className="keyframe-chips">
+              {selectedFrames.length ? (
+                selectedFrames.map((frame) => (
+                  <button
+                    key={frame.id}
+                    onClick={() => onTimelineTimeChange(frame.time)}
+                    title="点击定位；使用右侧删除按钮移除关键帧"
+                  >
+                    <span>{formatTimelineTime(frame.time)}</span>
+                    <span>{timelinePropertyLabels[frame.property]}</span>
+                    <i
+                      role="button"
+                      aria-label="删除关键帧"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteKeyframe(frame.id);
+                      }}
+                    >
+                      <Trash2 size={11} />
+                    </i>
+                  </button>
+                ))
+              ) : (
+                <span className="timeline-hint">选择属性并在当前时间记录对象状态</span>
+              )}
+            </div>
           </div>
         </div>
       ) : (
@@ -1624,6 +1873,17 @@ function RuntimeView({
     title: string;
     message: string;
   } | null>(null);
+  const [runtimeTimelineTime, setRuntimeTimelineTime] = useState(0);
+  const runtimeTimeline = useMemo(() => normalizeTimeline(scene.timeline), [scene.timeline]);
+  const animatedNodes = useMemo(
+    () => applyTimeline(scene, runtimeTimelineTime),
+    [scene, runtimeTimelineTime],
+  );
+  const runtimeCameraView = useMemo(
+    () => applyCameraTimeline(scene, runtimeTimelineTime),
+    [scene, runtimeTimelineTime],
+  );
+  const focusClearTimerRef = useRef<number | undefined>(undefined);
   const nodeById = useMemo(
     () => new Map(scene.nodes.map((node) => [node.id, node])),
     [scene.nodes],
@@ -1645,7 +1905,13 @@ function RuntimeView({
           return;
         }
         if (action.type === 'focusCamera' && targetId) {
-          setFocusRequest({ nodeId: targetId, nonce: Date.now() });
+          const request = { nodeId: targetId, nonce: Date.now() };
+          setFocusRequest(request);
+          window.clearTimeout(focusClearTimerRef.current);
+          // 保留短暂的事件聚焦镜头，之后继续播放场景自动镜头。
+          focusClearTimerRef.current = window.setTimeout(() => {
+            setFocusRequest((current) => (current?.nonce === request.nonce ? null : current));
+          }, 1800);
           return;
         }
         if (action.type === 'showPopup') {
@@ -1696,7 +1962,32 @@ function RuntimeView({
     setRuntimeOverrides({});
     setRuntimePopup(null);
     setFocusRequest(null);
+    setRuntimeTimelineTime(0);
+    window.clearTimeout(focusClearTimerRef.current);
   }, [scene]);
+
+  useEffect(() => () => window.clearTimeout(focusClearTimerRef.current), []);
+
+  useEffect(() => {
+    // 运行态自动播放场景时间轴，退出预览或切换场景时清理动画帧。
+    let frameId = 0;
+    let lastTimestamp = performance.now();
+    let completed = false;
+    const tick = (timestamp: number) => {
+      const delta = Math.min(0.1, Math.max(0, (timestamp - lastTimestamp) / 1000));
+      lastTimestamp = timestamp;
+      setRuntimeTimelineTime((current) => {
+        const next = current + delta;
+        if (next < runtimeTimeline.duration) return next;
+        if (runtimeTimeline.loop) return next % runtimeTimeline.duration;
+        completed = true;
+        return runtimeTimeline.duration;
+      });
+      if (!completed) frameId = requestAnimationFrame(tick);
+    };
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [runtimeTimeline.duration, runtimeTimeline.loop]);
 
   useEffect(() => {
     runTrigger('sceneLoad', null);
@@ -1722,7 +2013,8 @@ function RuntimeView({
       </header>
       <div className="runtime-canvas">
         <SceneCanvas
-          nodes={scene.nodes}
+          nodes={animatedNodes}
+          cameraView={runtimeCameraView}
           selectedId={null}
           readOnly
           runtimeOverrides={runtimeOverrides}

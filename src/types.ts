@@ -74,11 +74,42 @@ export type SceneEventRule = {
   actions: SceneEventAction[];
 };
 
+export type SceneTimelineProperty =
+  'position' | 'rotation' | 'scale' | 'color' | 'opacity' | 'visible';
+
+export type SceneKeyframeValue = [number, number, number] | number | string | boolean;
+
+export type SceneKeyframe = {
+  id: string;
+  nodeId: string;
+  time: number;
+  property: SceneTimelineProperty;
+  value: SceneKeyframeValue;
+};
+
+export type SceneCameraKeyframe = {
+  id: string;
+  time: number;
+  position: [number, number, number];
+  target: [number, number, number];
+  fov?: number;
+};
+
+export type SceneTimeline = {
+  duration: number;
+  loop: boolean;
+  keyframes: SceneKeyframe[];
+  /** 场景镜头关键帧，用于全景、推进、局部聚焦等演示镜头。 */
+  cameraKeyframes?: SceneCameraKeyframe[];
+};
+
 export type SceneDocument = {
   schemaVersion: string;
   nodes: SceneNode[];
   /** 事件规则：用于运行态点击/悬停/加载后触发相机聚焦、弹窗、变色、显隐等动作。 */
   events?: SceneEventRule[];
+  /** 场景级关键帧动画配置；未配置时按 15 秒循环场景处理。 */
+  timeline?: SceneTimeline;
 };
 export type Release = {
   id: string;

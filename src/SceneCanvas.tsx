@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import type { NodeKind, SceneNode, TransformMode } from './types';
+import type { NodeKind, SceneCameraKeyframe, SceneNode, TransformMode } from './types';
 
 type TransformPatch = Pick<SceneNode, 'position' | 'rotation' | 'scale'>;
 export type CameraFocusRequest = { nodeId: string; nonce: number };
@@ -14,6 +14,7 @@ type Props = {
   readOnly?: boolean;
   runtimeOverrides?: Record<string, Partial<Pick<SceneNode, 'color' | 'visible' | 'opacity'>>>;
   focusRequest?: CameraFocusRequest | null;
+  cameraView?: SceneCameraKeyframe | null;
   onSelect: (id: string | null) => void;
   onNodeClick?: (id: string) => void;
   onNodeDoubleClick?: (id: string) => void;
@@ -32,6 +33,7 @@ export default function SceneCanvas({
   readOnly = false,
   runtimeOverrides = {},
   focusRequest = null,
+  cameraView = null,
   onSelect,
   onNodeClick,
   onNodeDoubleClick,
@@ -244,6 +246,19 @@ export default function SceneCanvas({
     camera.updateProjectionMatrix();
     orbit.update();
   }, [focusRequest]);
+
+  useEffect(() => {
+    // 事件聚焦期间让用户看到明确的目标，聚焦结束后再恢复自动镜头。
+    if (focusRequest || !cameraView) return;
+    const camera = cameraRef.current;
+    const orbit = orbitRef.current;
+    if (!camera || !orbit) return;
+    camera.position.set(...cameraView.position);
+    orbit.target.set(...cameraView.target);
+    camera.fov = cameraView.fov ?? 48;
+    camera.updateProjectionMatrix();
+    orbit.update();
+  }, [cameraView, focusRequest]);
 
   const selectedLocked = nodes.find((item) => item.id === selectedId)?.locked ?? false;
   useEffect(() => {

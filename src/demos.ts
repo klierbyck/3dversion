@@ -2,10 +2,13 @@ import {
   createNode,
   type NodeKind,
   type ProjectMeta,
+  type SceneCameraKeyframe,
   type SceneDocument,
   type SceneEventRule,
+  type SceneKeyframe,
   type SceneNode,
 } from './types';
+import { normalizeTimeline } from './timeline';
 
 export type DemoProject = ProjectMeta & { scene: SceneDocument };
 
@@ -114,6 +117,166 @@ type DemoEventSpec = {
   visible?: boolean;
 };
 
+const vector = (x: number, y: number, z: number): [number, number, number] => [x, y, z];
+
+/** 为四个示例生成统一的“全景-推进-局部-回景”镜头路径。 */
+function createDemoCameraKeyframes(
+  scene: SceneDocument,
+  duration: number,
+  focusNode: SceneNode | undefined,
+): SceneCameraKeyframe[] {
+  const xValues = scene.nodes.map((node) => node.position[0]);
+  const zValues = scene.nodes.map((node) => node.position[2]);
+  const minX = Math.min(...xValues, -8);
+  const maxX = Math.max(...xValues, 8);
+  const minZ = Math.min(...zValues, -8);
+  const maxZ = Math.max(...zValues, 8);
+  const center = vector((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
+  const span = Math.max(16, maxX - minX, maxZ - minZ);
+  const far = span * 0.92;
+  const localTarget = focusNode?.position ?? center;
+  const localDistance = Math.max(5, span * 0.24);
+  const overviewPosition = vector(center[0] + far, Math.max(13, span * 0.74), center[2] + far);
+  return [
+    {
+      id: 'demo-camera-overview',
+      time: 0,
+      position: overviewPosition,
+      target: center,
+      fov: 53,
+    },
+    {
+      id: 'demo-camera-approach',
+      time: 3,
+      position: vector(center[0] + far * 0.62, Math.max(9, span * 0.5), center[2] + far * 0.62),
+      target: center,
+      fov: 48,
+    },
+    {
+      id: 'demo-camera-local',
+      time: 6,
+      position: vector(
+        localTarget[0] + localDistance,
+        Math.max(4.5, span * 0.2),
+        localTarget[2] + localDistance,
+      ),
+      target: vector(localTarget[0], localTarget[1] + 1.2, localTarget[2]),
+      fov: 40,
+    },
+    {
+      id: 'demo-camera-orbit',
+      time: 9,
+      position: vector(
+        localTarget[0] - localDistance,
+        Math.max(5, span * 0.24),
+        localTarget[2] + localDistance * 0.8,
+      ),
+      target: vector(localTarget[0], localTarget[1] + 1.2, localTarget[2]),
+      fov: 42,
+    },
+    {
+      id: 'demo-camera-return',
+      time: duration,
+      position: overviewPosition,
+      target: center,
+      fov: 53,
+    },
+  ];
+}
+
+/** 生成示例对象动画；车辆采用绕行路径，确保不会穿过同一车道上的其他车辆。 */
+function createDemoAnimationKeyframes(scene: SceneDocument, duration: number): SceneKeyframe[] {
+  const keyframes: SceneKeyframe[] = [];
+  const animatedNode = scene.nodes.find((node) => node.kind === 'truck');
+  if (animatedNode) {
+    const [x, y, z] = animatedNode.position;
+    const side = x <= 0 ? -4 : 4;
+    const laneZ = z + (z >= 0 ? 3 : -3);
+    const safeX = x + side;
+    const motion = [
+      [0, vector(x, y, z)],
+      [2.4, vector(safeX, y, z)],
+      [5.2, vector(safeX, y, laneZ)],
+      [8.5, vector(x, y, laneZ)],
+      [duration, vector(x, y, z)],
+    ] as const;
+    motion.forEach(([time, value], index) =>
+      keyframes.push({
+        id: `demo-vehicle-position-${index}`,
+        nodeId: animatedNode.id,
+        time,
+        property: 'position',
+        value,
+      }),
+    );
+    const baseRotation = animatedNode.rotation;
+    const turnYaw = z >= 0 ? 90 : -90;
+    const rotations = [
+      [0, baseRotation[1] + (side < 0 ? 180 : 0)],
+      [2.4, baseRotation[1] + (side < 0 ? 180 : 0)],
+      [5.2, baseRotation[1] + turnYaw],
+      [8.5, baseRotation[1]],
+      [duration, baseRotation[1] - turnYaw],
+    ] as const;
+    rotations.forEach(([time, yaw], index) =>
+      keyframes.push({
+        id: `demo-vehicle-rotation-${index}`,
+        nodeId: animatedNode.id,
+        time,
+        property: 'rotation',
+        value: vector(baseRotation[0], yaw, baseRotation[2]),
+      }),
+    );
+  } else {
+    const turbine = scene.nodes.find((node) => node.kind === 'windTurbine');
+    if (turbine) {
+      keyframes.push(
+        {
+          id: 'demo-turbine-start',
+          nodeId: turbine.id,
+          time: 0,
+          property: 'rotation',
+          value: turbine.rotation,
+        },
+        {
+          id: 'demo-turbine-mid',
+          nodeId: turbine.id,
+          time: duration / 2,
+          property: 'rotation',
+          value: vector(turbine.rotation[0], turbine.rotation[1] + 360, turbine.rotation[2]),
+        },
+        {
+          id: 'demo-turbine-end',
+          nodeId: turbine.id,
+          time: duration,
+          property: 'rotation',
+          value: vector(turbine.rotation[0], turbine.rotation[1] + 720, turbine.rotation[2]),
+        },
+      );
+    }
+  }
+  const sensor = scene.nodes.find((node) => node.kind === 'sensor');
+  if (sensor) {
+    const [sx, sy, sz] = sensor.scale;
+    [
+      [0, 1],
+      [3, 0.82],
+      [6, 1.18],
+      [9, 0.88],
+      [duration, 1],
+    ].forEach(([time, factor], index) => {
+      keyframes.push({
+        id: `demo-sensor-pulse-${index}`,
+        nodeId: sensor.id,
+        time,
+        property: 'scale',
+        value: vector(sx * factor, sy * factor, sz * factor),
+      });
+    });
+  }
+  return keyframes;
+}
+
 /** 根据节点名称给示例场景挂载事件，避免随机节点 ID 影响事件目标映射。 */
 function sceneWithEvents(scene: SceneDocument, specs: DemoEventSpec[]): SceneDocument {
   const idByName = new Map(scene.nodes.map((node) => [node.name, node.id]));
@@ -158,7 +321,19 @@ function sceneWithEvents(scene: SceneDocument, specs: DemoEventSpec[]): SceneDoc
       },
     ],
   };
-  return { ...scene, events: [sceneEvent, ...events] };
+  const animatedNode =
+    scene.nodes.find((node) => node.kind === 'truck') ??
+    scene.nodes.find((node) => node.kind === 'windTurbine') ??
+    scene.nodes[0];
+  const duration = 12;
+  const keyframes = animatedNode ? createDemoAnimationKeyframes(scene, duration) : [];
+  const timeline = {
+    duration,
+    loop: false,
+    keyframes,
+    cameraKeyframes: createDemoCameraKeyframes(scene, duration, overviewTarget),
+  };
+  return { ...scene, events: [sceneEvent, ...events], timeline };
 }
 
 /**
@@ -423,7 +598,7 @@ export function upgradeDemoScene(
   const demo = demoById(projectId);
   // 旧版本缓存可能写入 null 或不完整对象，先回退到安全场景，避免读取 events 时崩溃。
   if (!isSceneDocument(scene)) return demo?.scene ?? emptyScene;
-  if (!demo) return scene;
+  if (!demo) return normalizeSceneDocument(scene);
   const isLegacySeed =
     projectId === 'demo-park' &&
     JSON.stringify(sceneStructureWithoutIds(scene)) ===
@@ -432,7 +607,55 @@ export function upgradeDemoScene(
     !scene.events?.length &&
     JSON.stringify(sceneStructureWithoutIds(scene)) ===
       JSON.stringify(sceneStructureWithoutIds(demo.scene));
-  return isLegacySeed || isCurrentSeedWithoutEvents ? demo.scene : normalizeSceneEvents(scene);
+  const isCurrentSeed =
+    JSON.stringify(sceneStructureWithoutIds(scene)) ===
+    JSON.stringify(sceneStructureWithoutIds(demo.scene));
+  if (isLegacySeed || isCurrentSeedWithoutEvents) return demo.scene;
+  const normalized = normalizeSceneDocument(scene);
+  const normalizedTimeline = normalizeTimeline(scene.timeline);
+  // 兼容旧版示例草稿：节点未被编辑时补入镜头动画，并将官方关键帧映射到旧草稿节点 ID。
+  if (isCurrentSeed && demo.scene.timeline) {
+    const currentIdByDemoId = new Map(
+      demo.scene.nodes.map((node, index) => [node.id, scene.nodes[index]?.id ?? node.id]),
+    );
+    const isLegacyDemoMotion = normalizedTimeline.keyframes.some((frame) =>
+      frame.id.startsWith('demo-keyframe-'),
+    );
+    const demoKeyframes = demo.scene.timeline.keyframes.map((frame) => ({
+      ...frame,
+      nodeId: currentIdByDemoId.get(frame.nodeId) ?? frame.nodeId,
+    }));
+    const keyframes = isLegacyDemoMotion
+      ? demoKeyframes
+      : [
+          ...normalizedTimeline.keyframes,
+          ...demoKeyframes.filter(
+            (frame) => !normalizedTimeline.keyframes.some((item) => item.id === frame.id),
+          ),
+        ];
+    const cameraKeyframes = normalizedTimeline.cameraKeyframes?.length
+      ? normalizedTimeline.cameraKeyframes
+      : demo.scene.timeline.cameraKeyframes;
+    const isSystemDemoTimeline =
+      keyframes.length > 0 && keyframes.every((frame) => frame.id.startsWith('demo-'));
+    const loop = isSystemDemoTimeline ? false : normalizedTimeline.loop;
+    if (
+      keyframes.length !== normalizedTimeline.keyframes.length ||
+      cameraKeyframes?.length !== normalizedTimeline.cameraKeyframes?.length ||
+      loop !== normalizedTimeline.loop
+    ) {
+      return {
+        ...normalized,
+        timeline: {
+          ...normalizedTimeline,
+          keyframes,
+          cameraKeyframes,
+          loop,
+        },
+      };
+    }
+  }
+  return normalized;
 }
 
 /** 运行时校验本地缓存/接口返回的场景结构，防止脏数据击穿项目列表页面。 */
@@ -443,7 +666,7 @@ function isSceneDocument(value: unknown): value is SceneDocument {
 }
 
 /** 将旧版仅有 trigger.nodeId 的事件迁移为显式场景级/对象级规则。 */
-function normalizeSceneEvents(scene: SceneDocument): SceneDocument {
+function normalizeSceneDocument(scene: SceneDocument): SceneDocument {
   const rawEvents = Array.isArray((scene as { events?: unknown }).events)
     ? ((scene as { events: unknown[] }).events ?? [])
     : [];
@@ -469,7 +692,15 @@ function normalizeSceneEvents(scene: SceneDocument): SceneDocument {
       };
     })
     .filter((rule) => rule.actions.length > 0);
-  return { ...scene, events };
+  const timeline = normalizeTimeline(scene.timeline);
+  return {
+    ...scene,
+    events,
+    timeline: {
+      ...timeline,
+      keyframes: timeline.keyframes.filter((frame) => nodeIds.has(frame.nodeId)),
+    },
+  };
 }
 
 function isEventRule(value: unknown): value is SceneEventRule {

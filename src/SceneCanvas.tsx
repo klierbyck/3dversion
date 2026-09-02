@@ -24,6 +24,7 @@ type Props = {
   onNodeClick?: (id: string) => void;
   onNodeDoubleClick?: (id: string) => void;
   onNodeHover?: (id: string | null) => void;
+  onPointerWorldPosition?: (position: [number, number, number]) => void;
   onDropKind?: (kind: NodeKind, position: [number, number, number]) => void;
   onDropAsset?: (assetId: string, position: [number, number, number]) => void;
   onTransform?: (id: string, patch: TransformPatch, finished: boolean) => void;
@@ -44,6 +45,7 @@ export default function SceneCanvas({
   onNodeClick,
   onNodeDoubleClick,
   onNodeHover,
+  onPointerWorldPosition,
   onDropKind,
   onDropAsset,
   onTransform,
@@ -117,6 +119,23 @@ export default function SceneCanvas({
       orbit.maxDistance = 100;
       orbit.maxPolarAngle = Math.PI * 0.49;
 
+      let externalDragActive = false;
+      const handleExternalDragStart = (event: DragEvent) => {
+        if (externalDragActive || !(event.target instanceof HTMLElement) || !event.target.draggable)
+          return;
+        externalDragActive = true;
+        orbit.saveState();
+        orbit.enabled = false;
+      };
+      const handleExternalDragEnd = () => {
+        if (!externalDragActive) return;
+        orbit.reset();
+        externalDragActive = false;
+        orbit.enabled = !transformRef.current?.dragging;
+      };
+      document.addEventListener('dragstart', handleExternalDragStart);
+      document.addEventListener('dragend', handleExternalDragEnd);
+
       const transform = new TransformControls(camera, renderer.domElement);
       transform.setSize(0.82);
       transform.setTranslationSnap(0.5);
@@ -166,13 +185,15 @@ export default function SceneCanvas({
       let frame = 0;
       const animate = () => {
         frame = requestAnimationFrame(animate);
-        orbit.update();
+        if (!externalDragActive) orbit.update();
         renderer.render(scene, camera);
       };
       animate();
       return () => {
         cancelAnimationFrame(frame);
         observer.disconnect();
+        document.removeEventListener('dragstart', handleExternalDragStart);
+        document.removeEventListener('dragend', handleExternalDragEnd);
         orbit.dispose();
         transform.dispose();
         // 路由切换或预览退出时主动释放 WebGL 上下文，避免多次打开 Demo 后触发浏览器上下文上限警告。
@@ -372,6 +393,15 @@ export default function SceneCanvas({
       const hits = raycaster.intersectObjects([...objectsRef.current.values()], true);
       return hits.map((hit) => findNodeId(hit.object)).find(Boolean) ?? null;
     };
+    const groundPosition = (event: MouseEvent | PointerEvent): [number, number, number] | null => {
+      const pointer = pointerFromEvent(event, renderer.domElement);
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(pointer, camera);
+      const point = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), point))
+        return null;
+      return [snap(point.x), 0, snap(point.z)];
+    };
     const onClick = (event: MouseEvent) => {
       if (
         Math.hypot(event.clientX - pointerDown[0], event.clientY - pointerDown[1]) > 4 ||
@@ -387,6 +417,8 @@ export default function SceneCanvas({
       if (id) onNodeDoubleClick?.(id);
     };
     const onPointerMove = (event: PointerEvent) => {
+      const position = groundPosition(event);
+      if (position) onPointerWorldPosition?.(position);
       const id = hitTest(event);
       if (id === hoveredIdRef.current) return;
       hoveredIdRef.current = id;
@@ -402,7 +434,7 @@ export default function SceneCanvas({
       renderer.domElement.removeEventListener('dblclick', onDoubleClick);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
     };
-  }, [onNodeClick, onNodeDoubleClick, onNodeHover, onSelect]);
+  }, [onNodeClick, onNodeDoubleClick, onNodeHover, onPointerWorldPosition, onSelect]);
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();

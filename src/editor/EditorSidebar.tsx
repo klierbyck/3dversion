@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, Lock, LockOpen } from 'lucide-react';
 import type { NodeKind, SceneNode } from '../types';
 
 /** 组件分类横向滚动条：两端箭头按钮滚动，滚动到边界时对应箭头置灰。 */
@@ -77,6 +77,7 @@ export function Tree({
   collapsedIds,
   onSelect,
   onToggleVisible,
+  onToggleLocked,
   onToggleCollapsed,
   iconFor,
 }: {
@@ -87,6 +88,7 @@ export function Tree({
   collapsedIds: Set<string>;
   onSelect: (id: string) => void;
   onToggleVisible: (id: string) => void;
+  onToggleLocked: (id: string) => void;
   onToggleCollapsed: (id: string) => void;
   iconFor: (kind: NodeKind) => ReactNode;
 }) {
@@ -127,6 +129,14 @@ export function Tree({
                 >
                   {node.visible ? <Eye size={13} /> : <EyeOff size={13} />}
                 </button>
+                <button
+                  className={`tree-action tree-lock-action ${node.locked ? 'locked' : 'muted'}`}
+                  title={node.locked ? '解锁对象' : '锁定对象'}
+                  aria-label={node.locked ? `解锁${node.name}` : `锁定${node.name}`}
+                  onClick={() => onToggleLocked(node.id)}
+                >
+                  {node.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+                </button>
               </div>
               {hasChildren && !collapsed && (
                 <Tree
@@ -137,6 +147,7 @@ export function Tree({
                   collapsedIds={collapsedIds}
                   onSelect={onSelect}
                   onToggleVisible={onToggleVisible}
+                  onToggleLocked={onToggleLocked}
                   onToggleCollapsed={onToggleCollapsed}
                   iconFor={iconFor}
                 />

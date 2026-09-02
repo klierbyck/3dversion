@@ -3,7 +3,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Copy,
   Download,
   Eye,
   EyeOff,
@@ -20,7 +19,6 @@ import {
   Settings2,
   Sparkles,
   Square,
-  Trash2,
   Undo2,
   Upload,
   X,
@@ -124,6 +122,8 @@ export default function EditorPage({ project, onExit }: Props) {
   const [isRuntime, setIsRuntime] = useState(false);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [gridVisible, setGridVisible] = useState(true);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [undoStack, setUndoStack] = useState<SceneDocument[]>([]);
   const [redoStack, setRedoStack] = useState<SceneDocument[]>([]);
@@ -136,6 +136,8 @@ export default function EditorPage({ project, onExit }: Props) {
   // 避免 StrictMode 双调用 setState updater 时把撤销快照重复入栈。
   const sceneRef = useRef(initialScene);
   const selectedIdRef = useRef(selectedId);
+  const copiedNodeRef = useRef<SceneNode | null>(null);
+  const canvasPointerRef = useRef<[number, number, number] | null>(null);
   const transformStartRef = useRef<SceneDocument | null>(null);
   const toastTimerRef = useRef<number | undefined>(undefined);
 
@@ -165,6 +167,10 @@ export default function EditorPage({ project, onExit }: Props) {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
   }, []);
   useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+
+  const handleCanvasPointerPosition = useCallback((position: [number, number, number]) => {
+    canvasPointerRef.current = position;
+  }, []);
 
   useEffect(() => {
     if (!timelinePlaying || !timeline.keyframes.length) return;
@@ -523,25 +529,49 @@ export default function EditorPage({ project, onExit }: Props) {
     setSelectedId(null);
   }, [showToast, updateScene]);
 
-  const duplicateSelected = useCallback(() => {
+  const copySelected = useCallback(() => {
     const source = sceneRef.current.nodes.find((node) => node.id === selectedIdRef.current);
     if (!source) return;
+    copiedNodeRef.current = structuredClone(source);
+    showToast(`已复制「${source.name}」`);
+  }, [showToast]);
+
+  const pasteCopied = useCallback(() => {
+    const source = copiedNodeRef.current;
+    if (!source) {
+      showToast('请先选择并复制一个对象');
+      return;
+    }
+    const targetPosition = canvasPointerRef.current ?? [
+      source.position[0] + 1,
+      0,
+      source.position[2],
+    ];
     const clone = {
-      ...source,
+      ...structuredClone(source),
       id: `${source.kind}-${uid()}`,
       name: `${source.name} 副本`,
-      position: [source.position[0] + 1, source.position[1], source.position[2]] as [
+      parentId:
+        source.parentId && sceneRef.current.nodes.some((node) => node.id === source.parentId)
+          ? source.parentId
+          : null,
+      position: [targetPosition[0], source.position[1], targetPosition[2]] as [
         number,
         number,
         number,
       ],
+      dataBindings: source.dataBindings?.map((binding) => ({
+        ...binding,
+        id: `binding-${uid()}`,
+      })),
     };
     updateScene((current) => ({
       ...current,
       nodes: [...current.nodes, clone],
     }));
     setSelectedId(clone.id);
-  }, [updateScene]);
+    showToast(`已创建「${clone.name}」`);
+  }, [showToast, updateScene]);
 
   const setNode = useCallback(
     (patch: Partial<SceneNode>) => {
@@ -681,6 +711,14 @@ export default function EditorPage({ project, onExit }: Props) {
     [patchNodes],
   );
 
+  const toggleLocked = useCallback(
+    (id: string) => {
+      const node = sceneRef.current.nodes.find((item) => item.id === id);
+      if (node) patchNodes(id, { locked: !node.locked });
+    },
+    [patchNodes],
+  );
+
   /** 撤销/重做后尽量保持当前选择，避免每次都跳到第一个节点。 */
   const applyHistoryScene = useCallback(
     (next: SceneDocument) => {
@@ -807,6 +845,16 @@ export default function EditorPage({ project, onExit }: Props) {
         event.shiftKey ? redo() : undo();
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        copySelected();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        pasteCopied();
+        return;
+      }
       if (event.key.toLowerCase() === 'w') setTransformMode('translate');
       if (event.key.toLowerCase() === 'e') setTransformMode('rotate');
       if (event.key.toLowerCase() === 'r') setTransformMode('scale');
@@ -815,7 +863,7 @@ export default function EditorPage({ project, onExit }: Props) {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [deleteSelected, handleSave, redo, undo]);
+  }, [copySelected, deleteSelected, handleSave, pasteCopied, redo, undo]);
 
   if (isRuntime)
     return (
@@ -868,6 +916,9 @@ export default function EditorPage({ project, onExit }: Props) {
           <button className="tool-button" onClick={() => setIsRuntime(true)}>
             <Play size={15} /> 预览
           </button>
+          <button className="tool-button" onClick={() => void openReleases()}>
+            <History size={15} /> 发布记录
+          </button>
           <button className="primary-button" onClick={() => void handlePublish()}>
             <Zap size={15} /> 发布
           </button>
@@ -876,8 +927,26 @@ export default function EditorPage({ project, onExit }: Props) {
           </button>
         </div>
       </header>
-      <main className="editor-body">
-        <aside className="left-panel">
+      <main
+        className={`editor-body${leftPanelCollapsed ? ' left-panel-collapsed' : ''}${rightPanelCollapsed ? ' right-panel-collapsed' : ''}`}
+      >
+        <aside className={`left-panel${leftPanelCollapsed ? ' collapsed' : ''}`}>
+          <button
+            className="panel-edge-button panel-collapse-button"
+            onClick={() => setLeftPanelCollapsed(true)}
+            title="收起左侧面板"
+            aria-label="收起左侧面板"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <button
+            className="panel-edge-button panel-expand-button"
+            onClick={() => setLeftPanelCollapsed(false)}
+            title="展开左侧面板"
+            aria-label="展开左侧面板"
+          >
+            <ChevronRight size={16} />
+          </button>
           <div className="panel-tabs">
             <button
               className={activeTab === 'components' ? 'active' : ''}
@@ -998,6 +1067,7 @@ export default function EditorPage({ project, onExit }: Props) {
               collapsedIds={collapsedIds}
               onSelect={setSelectedId}
               onToggleVisible={toggleVisible}
+              onToggleLocked={toggleLocked}
               onToggleCollapsed={(id) =>
                 setCollapsedIds((prev) => {
                   const next = new Set(prev);
@@ -1083,6 +1153,7 @@ export default function EditorPage({ project, onExit }: Props) {
               mode={transformMode}
               gridVisible={gridVisible}
               onSelect={setSelectedId}
+              onPointerWorldPosition={handleCanvasPointerPosition}
               onDropKind={addNode}
               onDropAsset={dropAssetNode}
               onTransformStart={handleTransformStart}
@@ -1125,18 +1196,25 @@ export default function EditorPage({ project, onExit }: Props) {
             />
           )}
         </section>
-        <aside className="right-panel">
+        <aside className={`right-panel${rightPanelCollapsed ? ' collapsed' : ''}`}>
+          <button
+            className="panel-edge-button panel-collapse-button"
+            onClick={() => setRightPanelCollapsed(true)}
+            title="收起右侧面板"
+            aria-label="收起右侧面板"
+          >
+            <ChevronRight size={16} />
+          </button>
+          <button
+            className="panel-edge-button panel-expand-button"
+            onClick={() => setRightPanelCollapsed(false)}
+            title="展开右侧面板"
+            aria-label="展开右侧面板"
+          >
+            <ChevronLeft size={16} />
+          </button>
           <div className="right-panel-head">
             <h2>{selected ? selected.name : '未选择对象'}</h2>
-            {selected && (
-              <button
-                className="icon-button"
-                onClick={deleteSelected}
-                title={selected.locked ? '对象已锁定' : '删除节点'}
-              >
-                <Trash2 size={16} />
-              </button>
-            )}
           </div>
           {selected ? (
             <>
@@ -1204,16 +1282,6 @@ export default function EditorPage({ project, onExit }: Props) {
               <span>在画布或场景树中选择对象后编辑属性</span>
             </div>
           )}
-          <div className="right-footer">
-            <button className="outline-button" onClick={duplicateSelected}>
-              <Copy size={14} />
-              复制对象
-            </button>
-            <button className="outline-button" onClick={() => void openReleases()}>
-              <History size={14} />
-              发布记录
-            </button>
-          </div>
         </aside>
       </main>
       {showReleases && (

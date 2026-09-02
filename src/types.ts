@@ -39,7 +39,21 @@ export type NodeKind =
   | 'valve'
   | 'transformer'
   | 'electricalCabinet'
-  | 'sensor';
+  | 'sensor'
+  | 'cctv'
+  | 'accessControl'
+  | 'robotArm'
+  | 'machineTool'
+  | 'displayStand'
+  | 'ledScreen'
+  | 'storageRack'
+  | 'pallet'
+  | 'agv'
+  | 'bridge'
+  | 'transmissionTower'
+  | 'serverRack'
+  | 'precisionAc'
+  | 'ups';
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 
@@ -200,7 +214,19 @@ export type ProjectMeta = {
 export type ComponentMeta = {
   kind: NodeKind;
   label: string;
-  category: '基础' | '建筑' | '交通' | '设施' | '工业' | '能源' | '数据' | '系统';
+  category:
+    | '基础'
+    | '建筑'
+    | '交通'
+    | '设施'
+    | '安防'
+    | '工业'
+    | '仓储'
+    | '能源'
+    | '展陈'
+    | '机房'
+    | '数据'
+    | '系统';
   icon: string;
   description: string;
   color?: string;
@@ -364,6 +390,22 @@ export const componentCatalog: ComponentMeta[] = [
     color: '#0f766e',
   },
   {
+    kind: 'cctv',
+    label: '安防摄像机',
+    category: '安防',
+    icon: '◉',
+    description: '带云台与镜头的监控摄像机',
+    color: '#dbe7ec',
+  },
+  {
+    kind: 'accessControl',
+    label: '门禁闸机',
+    category: '安防',
+    icon: '⊢',
+    description: '人行通道与刷卡门禁设备',
+    color: '#64748b',
+  },
+  {
     kind: 'tank',
     label: '立式储罐',
     category: '工业',
@@ -410,6 +452,46 @@ export const componentCatalog: ComponentMeta[] = [
     icon: '▱',
     description: '园区物流运输车',
     color: '#dc5f57',
+  },
+  {
+    kind: 'robotArm',
+    label: '工业机器人',
+    category: '工业',
+    icon: '⌁',
+    description: '六轴机械臂与作业底座',
+    color: '#f59e0b',
+  },
+  {
+    kind: 'machineTool',
+    label: '数控机床',
+    category: '工业',
+    icon: '▣',
+    description: '带观察窗和控制台的 CNC 设备',
+    color: '#3b82f6',
+  },
+  {
+    kind: 'storageRack',
+    label: '立体货架',
+    category: '仓储',
+    icon: '▥',
+    description: '多层重型仓储货架',
+    color: '#f59e0b',
+  },
+  {
+    kind: 'pallet',
+    label: '托盘货物',
+    category: '仓储',
+    icon: '▤',
+    description: '木质托盘与箱装货物',
+    color: '#b77946',
+  },
+  {
+    kind: 'agv',
+    label: 'AGV 搬运车',
+    category: '仓储',
+    icon: '▰',
+    description: '自动导航物料搬运机器人',
+    color: '#14b8a6',
   },
   {
     kind: 'pump',
@@ -465,6 +547,62 @@ export const componentCatalog: ComponentMeta[] = [
     category: '能源',
     icon: '▤',
     description: '低压配电与设备控制柜',
+    color: '#475569',
+  },
+  {
+    kind: 'transmissionTower',
+    label: '输电铁塔',
+    category: '能源',
+    icon: '⌁',
+    description: '高压输电线路钢结构塔架',
+    color: '#94a3b8',
+  },
+  {
+    kind: 'bridge',
+    label: '城市桥梁',
+    category: '建筑',
+    icon: '⌒',
+    description: '带桥塔和拉索的基础设施桥梁',
+    color: '#64748b',
+  },
+  {
+    kind: 'displayStand',
+    label: '商品展台',
+    category: '展陈',
+    icon: '◈',
+    description: '带灯带与旋转台面的展陈底座',
+    color: '#e2e8f0',
+  },
+  {
+    kind: 'ledScreen',
+    label: '数字展示屏',
+    category: '展陈',
+    icon: '▣',
+    description: '大尺寸发光数字内容屏',
+    color: '#06b6d4',
+  },
+  {
+    kind: 'serverRack',
+    label: '服务器机柜',
+    category: '机房',
+    icon: '▤',
+    description: '带服务器、指示灯与玻璃门的标准机柜',
+    color: '#334155',
+  },
+  {
+    kind: 'precisionAc',
+    label: '精密空调',
+    category: '机房',
+    icon: '▥',
+    description: '数据中心列间精密制冷设备',
+    color: '#cbd5e1',
+  },
+  {
+    kind: 'ups',
+    label: 'UPS 电源',
+    category: '机房',
+    icon: 'ϟ',
+    description: '不间断电源与电池柜设备',
     color: '#475569',
   },
   {

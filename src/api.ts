@@ -176,10 +176,11 @@ function mergeDemoCatalog(list: ProjectMeta[]): ProjectMeta[] {
     return demo
       ? {
           ...item,
-          icon: item.icon || demo.icon,
-          description: item.description || demo.description,
+          name: demo.name,
+          icon: demo.icon,
+          description: demo.description,
           isDemo: true,
-          runtime: item.runtime ?? demo.runtime,
+          runtime: demo.runtime,
         }
       : item;
   });

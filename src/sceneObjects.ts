@@ -159,6 +159,20 @@ export function buildObject(node: SceneNode): THREE.Object3D {
   if (node.kind === 'transformer') return buildTransformer(color);
   if (node.kind === 'electricalCabinet') return buildElectricalCabinet(color);
   if (node.kind === 'sensor') return buildSensor(color);
+  if (node.kind === 'cctv') return buildCctv(color);
+  if (node.kind === 'accessControl') return buildAccessControl(color);
+  if (node.kind === 'robotArm') return buildRobotArm(color);
+  if (node.kind === 'machineTool') return buildMachineTool(color);
+  if (node.kind === 'displayStand') return buildDisplayStand(color);
+  if (node.kind === 'ledScreen') return buildLedScreen(color);
+  if (node.kind === 'storageRack') return buildStorageRack(color);
+  if (node.kind === 'pallet') return buildPallet(color);
+  if (node.kind === 'agv') return buildAgv(color);
+  if (node.kind === 'bridge') return buildBridge(color);
+  if (node.kind === 'transmissionTower') return buildTransmissionTower(color);
+  if (node.kind === 'serverRack') return buildServerRack(color);
+  if (node.kind === 'precisionAc') return buildPrecisionAc(color);
+  if (node.kind === 'ups') return buildUps(color);
   if (node.kind === 'light') {
     const light = new THREE.PointLight(color, 3, 16);
     light.position.y = 1.5;
@@ -560,5 +574,291 @@ function buildSensor(color: string) {
   const ring = mesh(new THREE.TorusGeometry(0.5, 0.035, 8, 24), color, [0, 2.5, 0], true);
   ring.rotation.x = Math.PI / 2;
   root.add(ring);
+  return root;
+}
+
+function beamBetween(
+  start: [number, number, number],
+  end: [number, number, number],
+  radius: number,
+  color: string,
+  tintable = false,
+) {
+  const from = new THREE.Vector3(...start);
+  const to = new THREE.Vector3(...end);
+  const direction = to.clone().sub(from);
+  const item = cylinder(radius, radius, direction.length(), color, [0, 0, 0], tintable, 12);
+  item.position.copy(from.add(to).multiplyScalar(0.5));
+  item.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  return item;
+}
+
+function buildCctv(color: string) {
+  const body = cylinder(0.32, 0.38, 1.15, color, [0.35, 2.75, 0], true);
+  body.rotation.z = Math.PI / 2;
+  const lens = cylinder(0.19, 0.25, 0.14, '#0f172a', [0.96, 2.75, 0]);
+  lens.rotation.z = Math.PI / 2;
+  const hood = box([0.72, 0.12, 0.74], '#64748b', [0.4, 3.12, 0]);
+  hood.rotation.z = -0.12;
+  return group(
+    cylinder(0.09, 0.16, 2.45, '#64748b', [0, 1.22, 0]),
+    cylinder(0.42, 0.5, 0.16, '#334155', [0, 0.08, 0]),
+    cylinder(0.28, 0.34, 0.24, '#334155', [0, 2.48, 0]),
+    body,
+    lens,
+    mesh(new THREE.SphereGeometry(0.11, 14, 10), '#38bdf8', [1.05, 2.75, 0]),
+    hood,
+  );
+}
+
+function buildAccessControl(color: string) {
+  const root = group(
+    box([0.55, 1.05, 1.75], color, [-1.15, 0.55, 0], true),
+    box([0.55, 1.05, 1.75], color, [1.15, 0.55, 0], true),
+    box([0.32, 0.28, 0.16], '#22c55e', [-1.15, 1.05, 0.72]),
+    box([0.32, 0.28, 0.16], '#22c55e', [1.15, 1.05, 0.72]),
+  );
+  for (const side of [-1, 1]) {
+    root.add(cylinder(0.08, 0.08, 1.45, '#cbd5e1', [side * 0.34, 0.86, 0]));
+    for (let arm = 0; arm < 3; arm++) {
+      const gateArm = box([0.85, 0.07, 0.1], '#dbe7ec', [side * 0.34, 1.3, 0]);
+      gateArm.geometry.translate(side * 0.42, 0, 0);
+      gateArm.rotation.y = (arm * Math.PI * 2) / 3;
+      root.add(gateArm);
+    }
+  }
+  return root;
+}
+
+function buildRobotArm(color: string) {
+  const root = group(
+    cylinder(0.85, 1.02, 0.35, '#334155', [0, 0.18, 0]),
+    cylinder(0.62, 0.72, 0.7, color, [0, 0.7, 0], true),
+    mesh(new THREE.SphereGeometry(0.48, 20, 14), '#1e293b', [0, 1.2, 0]),
+  );
+  root.add(
+    beamBetween([0, 1.2, 0], [0.35, 3.05, 0], 0.31, color, true),
+    mesh(new THREE.SphereGeometry(0.42, 20, 14), '#1e293b', [0.35, 3.05, 0]),
+    beamBetween([0.35, 3.05, 0], [1.65, 4.1, 0], 0.25, color, true),
+    mesh(new THREE.SphereGeometry(0.32, 20, 14), '#334155', [1.65, 4.1, 0]),
+    beamBetween([1.65, 4.1, 0], [2.25, 3.72, 0], 0.18, color, true),
+    cylinder(0.22, 0.22, 0.5, '#475569', [2.25, 3.45, 0]),
+  );
+  const gripperA = box([0.12, 0.72, 0.15], '#cbd5e1', [2.05, 3.08, 0]);
+  const gripperB = box([0.12, 0.72, 0.15], '#cbd5e1', [2.45, 3.08, 0]);
+  gripperA.rotation.z = -0.2;
+  gripperB.rotation.z = 0.2;
+  root.add(gripperA, gripperB);
+  return root;
+}
+
+function buildMachineTool(color: string) {
+  const root = group(
+    box([4.2, 0.28, 2.55], '#334155', [0, 0.14, 0]),
+    box([4, 2.75, 2.35], color, [0, 1.58, 0], true),
+    box([2.1, 1.65, 0.08], '#102a43', [-0.55, 1.65, 1.22]),
+    box([0.16, 1.65, 0.1], '#94a3b8', [0.45, 1.65, 1.27]),
+    box([0.72, 1.5, 0.18], '#1e293b', [1.5, 1.72, 1.25]),
+    box([0.5, 0.42, 0.08], '#0ea5e9', [1.5, 2.1, 1.36]),
+  );
+  ['#22c55e', '#facc15', '#ef4444'].forEach((indicator, index) =>
+    root.add(
+      mesh(new THREE.SphereGeometry(0.07, 10, 8), indicator, [1.32 + index * 0.18, 1.62, 1.36]),
+    ),
+  );
+  root.add(cylinder(0.08, 0.1, 0.65, '#64748b', [1.72, 3.25, 0]));
+  root.add(mesh(new THREE.SphereGeometry(0.14, 12, 8), '#22c55e', [1.72, 3.62, 0]));
+  return root;
+}
+
+function buildDisplayStand(color: string) {
+  const root = group(
+    cylinder(1.7, 1.9, 0.32, '#273449', [0, 0.16, 0]),
+    cylinder(1.42, 1.55, 0.36, color, [0, 0.5, 0], true, 48),
+    cylinder(1.22, 1.22, 0.1, '#dff7ff', [0, 0.75, 0], false, 48),
+  );
+  const lightRing = mesh(new THREE.TorusGeometry(1.48, 0.055, 12, 48), '#22d3ee', [0, 0.72, 0]);
+  lightRing.rotation.x = Math.PI / 2;
+  root.add(lightRing);
+  return root;
+}
+
+function buildLedScreen(color: string) {
+  const screenMaterial = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.55,
+    roughness: 0.25,
+    metalness: 0.1,
+  });
+  screenMaterial.userData.tintable = true;
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(5.2, 2.8, 0.12), screenMaterial);
+  panel.position.set(0, 2.55, 0);
+  panel.userData.tintable = true;
+  const root = group(
+    box([5.65, 3.25, 0.3], '#111827', [0, 2.55, -0.12]),
+    panel,
+    box([0.18, 2, 0.18], '#64748b', [-1.6, 1, -0.2]),
+    box([0.18, 2, 0.18], '#64748b', [1.6, 1, -0.2]),
+    box([4.4, 0.16, 1], '#334155', [0, 0.08, -0.2]),
+  );
+  for (let x = -2; x <= 2; x += 0.8)
+    root.add(box([0.38, 0.06, 0.04], '#e0f2fe', [x, 2.55 + Math.sin(x * 2) * 0.48, 0.08]));
+  return root;
+}
+
+function buildStorageRack(color: string) {
+  const root = group();
+  for (const x of [-2.45, 2.45])
+    for (const z of [-0.72, 0.72]) root.add(box([0.16, 4.4, 0.16], color, [x, 2.2, z], true));
+  for (const y of [0.55, 1.75, 2.95, 4.15]) {
+    root.add(
+      box([5.1, 0.16, 1.65], color, [0, y, 0], true),
+      box([4.7, 0.08, 1.42], '#64748b', [0, y + 0.12, 0]),
+    );
+    if (y < 4)
+      for (const x of [-1.55, 0, 1.55])
+        root.add(box([1.2, 0.72, 1.08], x === 0 ? '#60a5fa' : '#c08457', [x, y + 0.52, 0]));
+  }
+  return root;
+}
+
+function buildPallet(color: string) {
+  const root = group();
+  for (const z of [-0.75, -0.25, 0.25, 0.75])
+    root.add(box([2.5, 0.12, 0.32], color, [0, 0.24, z], true));
+  for (const x of [-0.95, 0, 0.95]) root.add(box([0.26, 0.28, 1.9], '#8b5e34', [x, 0.1, 0]));
+  root.add(
+    box([1.05, 0.9, 0.85], '#d7a86e', [-0.55, 0.77, -0.38]),
+    box([1.05, 0.9, 0.85], '#c98c52', [0.55, 0.77, -0.38]),
+    box([1.05, 0.9, 0.85], '#d7a86e', [-0.55, 0.77, 0.5]),
+    box([1.05, 0.9, 0.85], '#c98c52', [0.55, 0.77, 0.5]),
+  );
+  return root;
+}
+
+function buildAgv(color: string) {
+  const root = group(
+    cylinder(1.15, 1.15, 0.42, color, [0, 0.38, 0], true, 32),
+    cylinder(0.92, 0.92, 0.1, '#1e293b', [0, 0.64, 0], false, 32),
+    box([1.45, 0.12, 1.05], '#cbd5e1', [0, 0.75, 0]),
+    cylinder(0.08, 0.08, 0.48, '#94a3b8', [0, 1.03, 0]),
+    mesh(new THREE.SphereGeometry(0.16, 12, 8), '#22d3ee', [0, 1.33, 0]),
+  );
+  for (let i = 0; i < 6; i++) {
+    const angle = (i / 6) * Math.PI * 2;
+    root.add(
+      mesh(new THREE.SphereGeometry(0.055, 8, 6), '#22c55e', [
+        Math.cos(angle),
+        0.42,
+        Math.sin(angle),
+      ]),
+    );
+  }
+  return root;
+}
+
+function buildBridge(color: string) {
+  const root = group(
+    box([12, 0.45, 3.2], color, [0, 2.15, 0], true),
+    box([12, 0.12, 0.18], '#dbe7ec', [0, 2.42, -1.45]),
+    box([12, 0.12, 0.18], '#dbe7ec', [0, 2.42, 1.45]),
+  );
+  for (const x of [-4.5, 4.5]) {
+    root.add(
+      box([0.42, 5.8, 0.42], '#cbd5e1', [x, 3.3, -1.35]),
+      box([0.42, 5.8, 0.42], '#cbd5e1', [x, 3.3, 1.35]),
+      box([0.48, 0.34, 3.1], '#cbd5e1', [x, 5.95, 0]),
+      box([1.2, 2, 2.6], '#475569', [x, 1, 0]),
+    );
+    for (const offset of [-3.2, -2, -0.9, 0.9, 2, 3.2]) {
+      const deckX = x + Math.sign(offset) * Math.min(Math.abs(offset), 3.2);
+      root.add(
+        beamBetween([x, 5.7, -1.35], [deckX, 2.45, -1.35], 0.035, '#e2e8f0'),
+        beamBetween([x, 5.7, 1.35], [deckX, 2.45, 1.35], 0.035, '#e2e8f0'),
+      );
+    }
+  }
+  for (let x = -5; x <= 5; x += 1.5) root.add(box([0.75, 0.025, 0.07], '#facc15', [x, 2.39, 0]));
+  return root;
+}
+
+function buildTransmissionTower(color: string) {
+  const root = group(
+    box([0.2, 0.2, 0.2], color, [0, 6, 0], true),
+    beamBetween([-1.35, 0, -1.35], [0, 6, 0], 0.09, color, true),
+    beamBetween([1.35, 0, -1.35], [0, 6, 0], 0.09, color, true),
+    beamBetween([-1.35, 0, 1.35], [0, 6, 0], 0.09, color, true),
+    beamBetween([1.35, 0, 1.35], [0, 6, 0], 0.09, color, true),
+  );
+  for (const y of [1.5, 3, 4.5]) {
+    const width = 1.35 - y * 0.13;
+    root.add(
+      beamBetween([-width, y, -width], [width, y, width], 0.055, color, true),
+      beamBetween([width, y, -width], [-width, y, width], 0.055, color, true),
+      box([width * 2.5, 0.1, 0.1], color, [0, y + 0.25, 0], true),
+    );
+  }
+  for (const y of [4.3, 5.2]) {
+    const width = y === 4.3 ? 2.2 : 1.65;
+    root.add(box([width * 2, 0.12, 0.12], color, [0, y, 0], true));
+    for (const x of [-width, width]) {
+      root.add(cylinder(0.06, 0.08, 0.45, '#8b5cf6', [x, y - 0.27, 0]));
+    }
+  }
+  return root;
+}
+
+function buildServerRack(color: string) {
+  const root = group(
+    box([1.6, 3.8, 1.45], color, [0, 1.9, 0], true),
+    box([1.42, 3.5, 0.08], '#0f172a', [0, 1.9, 0.765]),
+    box([1.78, 0.12, 1.62], '#64748b', [0, 0.06, 0]),
+  );
+  for (let row = 0; row < 10; row++) {
+    const y = 0.45 + row * 0.3;
+    root.add(box([1.22, 0.2, 0.06], row % 3 === 0 ? '#243b53' : '#334155', [0, y, 0.82]));
+    for (let light = 0; light < 3; light++)
+      root.add(
+        mesh(
+          new THREE.SphereGeometry(0.035, 8, 6),
+          (row + light) % 5 === 0 ? '#fbbf24' : '#22c55e',
+          [0.37 + light * 0.16, y, 0.87],
+        ),
+      );
+  }
+  root.add(box([0.12, 0.46, 0.08], '#94a3b8', [0.61, 2.05, 0.87]));
+  return root;
+}
+
+function buildPrecisionAc(color: string) {
+  const root = group(
+    box([1.8, 3.5, 1.35], color, [0, 1.75, 0], true),
+    box([1.5, 0.5, 0.08], '#0f172a', [0, 2.65, 0.72]),
+    box([0.72, 0.3, 0.05], '#38bdf8', [0, 2.66, 0.78]),
+    box([2, 0.12, 1.55], '#64748b', [0, 0.06, 0]),
+  );
+  for (let row = 0; row < 7; row++)
+    root.add(box([1.42, 0.05, 0.08], '#64748b', [0, 0.55 + row * 0.22, 0.72]));
+  for (const x of [-0.48, 0.48]) {
+    const fan = mesh(new THREE.TorusGeometry(0.3, 0.045, 8, 24), '#475569', [x, 3.15, 0]);
+    fan.rotation.x = Math.PI / 2;
+    root.add(fan);
+  }
+  return root;
+}
+
+function buildUps(color: string) {
+  const root = group(
+    box([2.05, 3.25, 1.25], color, [0, 1.62, 0], true),
+    box([1.75, 2.9, 0.08], '#1e293b', [0, 1.62, 0.67]),
+    box([0.9, 0.48, 0.06], '#0f172a', [0, 2.45, 0.73]),
+    box([0.58, 0.24, 0.05], '#22d3ee', [-0.22, 2.45, 0.78]),
+    box([2.25, 0.12, 1.45], '#64748b', [0, 0.06, 0]),
+  );
+  for (let row = 0; row < 6; row++)
+    for (const x of [-0.52, 0, 0.52])
+      root.add(box([0.34, 0.22, 0.05], '#334155', [x, 0.55 + row * 0.28, 0.74]));
+  root.add(mesh(new THREE.SphereGeometry(0.07, 10, 8), '#22c55e', [0.7, 2.45, 0.78]));
   return root;
 }

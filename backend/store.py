@@ -22,26 +22,38 @@ def new_project(project_id: str, name: str, description: str, is_demo: bool) -> 
 projects: dict[str, dict] = {
     "demo-park": new_project(
         "demo-park",
-        "智慧园区态势中心",
-        "办公研发、道路绿化、低碳停车与园区交通的三维态势场景",
-        True,
-    ),
-    "demo-energy": new_project(
-        "demo-energy",
-        "风光储一体化电站",
-        "风机、光伏阵列与储能系统的发电监控示范场景",
+        "智慧楼宇与园区安防",
+        "融合 BIM 楼宇、园区 GIS、门禁视频与消防感知的综合安防场景",
         True,
     ),
     "demo-factory": new_project(
         "demo-factory",
-        "智能工厂数字孪生",
-        "车间产线、物流输送与设备状态的数字孪生场景",
+        "智能工厂产线监控",
+        "覆盖数控加工、机器人作业、输送与厂内物流的工业数字孪生场景",
+        True,
+    ),
+    "demo-showroom": new_project(
+        "demo-showroom",
+        "3D 数字化展厅",
+        "面向汽车与零售商品的沉浸式展销、热点讲解和虚拟定制场景",
         True,
     ),
     "demo-logistics": new_project(
         "demo-logistics",
-        "智慧物流园运营中心",
-        "仓库月台、车辆调度与吞吐数据的三维运营视图",
+        "智慧仓储 WMS 中心",
+        "展示库位、托盘、AGV、叉车与出入库输送协同的数字仓储场景",
+        True,
+    ),
+    "demo-energy": new_project(
+        "demo-energy",
+        "智慧城市与能源基建",
+        "城市建筑、交通桥梁、风光电网与基础设施的宏观态势感知场景",
+        True,
+    ),
+    "demo-datacenter": new_project(
+        "demo-datacenter",
+        "数据中心 DCIM 运维",
+        "覆盖服务器机柜、制冷、UPS 配电与动环监控的数据中心基础设施场景",
         True,
     ),
 }

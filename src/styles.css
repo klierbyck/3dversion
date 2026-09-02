@@ -947,15 +947,48 @@ button:disabled {
   color: #8195a6;
   font-size: 10px;
 }
-.timeline-duration input {
-  width: 46px;
-  height: 25px;
-  padding: 0 5px;
-  color: #d9e5ee;
-  border: 1px solid #2c3f51;
-  border-radius: 4px;
+.timeline-duration {
+  gap: 7px;
+}
+.timeline-duration-control {
+  display: inline-flex;
+  align-items: stretch;
+  height: 28px;
+  overflow: hidden;
+  border: 1px solid #33495d;
+  border-radius: 5px;
   background: #101b2a;
+}
+.timeline-duration-control:focus-within {
+  border-color: #5dbca8;
+  box-shadow: 0 0 0 2px #4bc6aa22;
+}
+.timeline-duration-control input,
+.timeline-duration-control select {
+  height: 100%;
+  color: #d9e5ee;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
   font-size: 10px;
+  font-family: 'DM Mono', monospace;
+}
+.timeline-duration-control input {
+  width: 58px;
+  padding: 0 8px;
+  text-align: right;
+}
+.timeline-duration-control select {
+  width: 68px;
+  padding: 0 22px 0 8px;
+  border-left: 1px solid #33495d;
+  color: #9eb2c2;
+  cursor: pointer;
+}
+.timeline-duration-control select option {
+  color: #d9e5ee;
+  background: #101b2a;
 }
 .timeline-loop input {
   accent-color: #72dfc0;

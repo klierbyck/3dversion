@@ -64,14 +64,20 @@ V1 为可运行 MVP。GLTF 组件在前端使用占位几何体承载节点流�
 ├── src/                         # React + Three.js 前端
 │   ├── App.tsx                  # 哈希路由入口（项目中心 / 编辑器）
 │   ├── ProjectsPage.tsx         # 项目中心：列表、搜索、新建、删除
-│   ├── EditorPage.tsx           # 场景编辑器、预览和发布中心
+│   ├── EditorPage.tsx           # 场景编辑器状态编排与工作台布局
+│   ├── editor/                  # 侧栏、属性、数据、事件、时间轴、预览与发布组件
 │   ├── demos.ts                 # 内置示例项目场景与运行态指标配置
-│   ├── SceneCanvas.tsx          # Three.js 场景画布
+│   ├── SceneCanvas.tsx          # Three.js 场景生命周期与交互
+│   ├── sceneObjects.ts          # Three.js 内置对象工厂与资源释放
 │   ├── api.ts                   # 项目/草稿/发布接口与本地降级
 │   ├── types.ts                 # 场景、组件、事件与项目类型
 │   └── styles.css               # 深色工作台样式（设计令牌 + 细滚动条 + 自适应）
 ├── backend/                     # FastAPI 后端
-│   ├── main.py                  # MVP API（含项目列表/创建/删除）
+│   ├── main.py                  # FastAPI 应用与 CORS 装配
+│   ├── models.py                # API 请求模型
+│   ├── store.py                 # 内存项目状态与示例初始化
+│   ├── common.py                # 统一响应结构
+│   ├── routes/                  # 项目版本、资源、运行态与数据源路由
 │   ├── requirements.txt
 │   ├── .dockerignore
 │   └── Dockerfile

@@ -15,9 +15,14 @@ export const defaultTimeline: SceneTimeline = {
   cameraKeyframes: [],
 };
 
+export const MAX_TIMELINE_DURATION_SECONDS = 24 * 60 * 60;
+
 /** 读取并约束时间轴配置，避免旧草稿或手工编辑 JSON 造成非法播放状态。 */
 export function normalizeTimeline(timeline?: SceneTimeline): SceneTimeline {
-  const duration = Math.min(3600, Math.max(1, Number(timeline?.duration) || 15));
+  const duration = Math.min(
+    MAX_TIMELINE_DURATION_SECONDS,
+    Math.max(1, Number(timeline?.duration) || 15),
+  );
   return {
     duration,
     loop: timeline?.loop ?? false,
@@ -94,10 +99,12 @@ export function propertyValue(
 
 export function formatTimelineTime(value: number): string {
   const safe = Math.max(0, value);
-  const minutes = Math.floor(safe / 60);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
   const seconds = Math.floor(safe % 60);
   const centiseconds = Math.floor((safe % 1) * 100);
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`;
+  const clock = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`;
+  return hours ? `${String(hours).padStart(2, '0')}:${clock}` : clock;
 }
 
 function interpolateFrames(

@@ -45,6 +45,10 @@ import {
   type SceneTimeline,
   type SceneTimelineProperty,
   type SceneNode,
+  type AssetMeta,
+  type SceneDataBinding,
+  type SceneDataBindingProperty,
+  type SceneDataSource,
   type TransformMode,
 } from './types';
 import {
@@ -54,6 +58,9 @@ import {
   loadDraft,
   reportRuntimeError,
   saveDraft,
+  listAssets,
+  uploadAsset,
+  testDataSource,
 } from './api';
 import {
   applyCameraTimeline,
@@ -64,6 +71,18 @@ import {
 } from './timeline';
 
 type Props = { project: ProjectMeta; onExit: () => void };
+
+function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isSceneSnapshot(value: unknown): value is SceneDocument {
+  return Boolean(
+    value && typeof value === 'object' && Array.isArray((value as SceneDocument).nodes),
+  );
+}
 
 const componentCategories = ['全部', '基础', '建筑', '工业', '能源', '数据', '系统'];
 
@@ -119,7 +138,7 @@ export default function EditorPage({ project, onExit }: Props) {
   const [bottomOpen, setBottomOpen] = useState(false);
   const [timelineTime, setTimelineTime] = useState(0);
   const [timelinePlaying, setTimelinePlaying] = useState(false);
-  const [inspectorTab, setInspectorTab] = useState<'properties' | 'events'>('properties');
+  const [inspectorTab, setInspectorTab] = useState<'properties' | 'data' | 'events'>('properties');
   const [showReleases, setShowReleases] = useState(false);
   const [releases, setReleases] = useState<Release[]>([]);
   const [runtimeErrors, setRuntimeErrors] = useState<RuntimeError[]>([]);
@@ -130,6 +149,9 @@ export default function EditorPage({ project, onExit }: Props) {
   const [undoStack, setUndoStack] = useState<SceneDocument[]>([]);
   const [redoStack, setRedoStack] = useState<SceneDocument[]>([]);
   const [toast, setToast] = useState<string | null>(null);
+  const [assets, setAssets] = useState<AssetMeta[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dataSourceStatus, setDataSourceStatus] = useState<string | null>(null);
 
   // 场景的最新值以 ref 为准：所有变更先算出 next 再统一写入，
   // 避免 StrictMode 双调用 setState updater 时把撤销快照重复入栈。
@@ -220,6 +242,16 @@ export default function EditorPage({ project, onExit }: Props) {
         setSelectedId(loadedScene.nodes[0]?.id ?? null);
         if (loadedScene !== draft.scene) setSaveState('未保存');
       }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listAssets(project.id).then((items) => {
+      if (!cancelled) setAssets(items);
     });
     return () => {
       cancelled = true;
@@ -541,6 +573,127 @@ export default function EditorPage({ project, onExit }: Props) {
     [patchNodes],
   );
 
+  const addDataSource = useCallback(() => {
+    const source: SceneDataSource = {
+      id: `source-${uid()}`,
+      name: `数据源 ${(sceneRef.current.dataSources?.length ?? 0) + 1}`,
+      type: 'json',
+      json: '{"value": 72}',
+      refreshInterval: 10,
+      timeout: 10,
+    };
+    updateScene((current) => ({
+      ...current,
+      dataSources: [...(current.dataSources ?? []), source],
+    }));
+    setDataSourceStatus('已添加数据源');
+  }, [updateScene]);
+
+  const patchDataSource = useCallback(
+    (id: string, patch: Partial<SceneDataSource>) => {
+      updateScene((current) => ({
+        ...current,
+        dataSources: (current.dataSources ?? []).map((source) =>
+          source.id === id ? { ...source, ...patch } : source,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
+  const deleteDataSource = useCallback(
+    (id: string) => {
+      updateScene((current) => ({
+        ...current,
+        dataSources: (current.dataSources ?? []).filter((source) => source.id !== id),
+        nodes: current.nodes.map((node) => ({
+          ...node,
+          dataBindings: node.dataBindings?.filter((binding) => binding.sourceId !== id),
+        })),
+      }));
+    },
+    [updateScene],
+  );
+
+  const addDataBinding = useCallback(
+    (binding: Omit<SceneDataBinding, 'id'>) => {
+      const id = selectedIdRef.current;
+      if (!id) return;
+      updateScene((current) => ({
+        ...current,
+        nodes: current.nodes.map((node) =>
+          node.id === id
+            ? {
+                ...node,
+                dataBindings: [
+                  ...(node.dataBindings ?? []).filter((item) => item.property !== binding.property),
+                  { ...binding, id: `binding-${uid()}` },
+                ],
+              }
+            : node,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
+  const deleteDataBinding = useCallback(
+    (bindingId: string) => {
+      const id = selectedIdRef.current;
+      if (!id) return;
+      updateScene((current) => ({
+        ...current,
+        nodes: current.nodes.map((node) =>
+          node.id === id
+            ? {
+                ...node,
+                dataBindings: node.dataBindings?.filter((binding) => binding.id !== bindingId),
+              }
+            : node,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
+  const handleUpload = useCallback(
+    async (file: File) => {
+      try {
+        const asset = await uploadAsset(project.id, file);
+        setAssets((current) => [...current.filter((item) => item.id !== asset.id), asset]);
+        showToast(`已上传资源：${asset.name}`);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '资源上传失败');
+      }
+    },
+    [project.id, showToast],
+  );
+
+  const addAssetNode = useCallback(
+    (asset: AssetMeta, position: [number, number, number] = [0, 0, 0]) => {
+      const node = createNode(
+        asset.kind === 'image' ? 'image' : 'model',
+        sceneRef.current.nodes.length,
+        null,
+        position,
+      );
+      node.name = asset.name;
+      node.assetPath = asset.url;
+      updateScene((current) => ({ ...current, nodes: [...current.nodes, node] }));
+      setSelectedId(node.id);
+      showToast(`已将${asset.kind === 'image' ? '图片' : '模型'}添加到场景`);
+    },
+    [showToast, updateScene],
+  );
+
+  const dropAssetNode = useCallback(
+    (assetId: string, position: [number, number, number]) => {
+      const asset = assets.find((item) => item.id === assetId);
+      if (asset) addAssetNode(asset, position);
+    },
+    [addAssetNode, assets],
+  );
+
   const toggleVisible = useCallback(
     (id: string) => {
       const node = sceneRef.current.nodes.find((item) => item.id === id);
@@ -565,17 +718,25 @@ export default function EditorPage({ project, onExit }: Props) {
     if (!undoStack.length) return;
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((stack) => stack.slice(0, -1));
+    if (!isSceneSnapshot(previous)) {
+      showToast('已忽略损坏的撤销记录，当前场景未发生变化');
+      return;
+    }
     setRedoStack((stack) => [...stack.slice(-49), sceneRef.current]);
     applyHistoryScene(previous);
-  }, [applyHistoryScene, undoStack]);
+  }, [applyHistoryScene, showToast, undoStack]);
 
   const redo = useCallback(() => {
     if (!redoStack.length) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack((stack) => stack.slice(0, -1));
+    if (!isSceneSnapshot(next)) {
+      showToast('已忽略损坏的重做记录，当前场景未发生变化');
+      return;
+    }
     setUndoStack((stack) => [...stack.slice(-49), sceneRef.current]);
     applyHistoryScene(next);
-  }, [applyHistoryScene, redoStack]);
+  }, [applyHistoryScene, redoStack, showToast]);
 
   const handleTransformStart = useCallback(() => {
     transformStartRef.current = sceneRef.current;
@@ -590,8 +751,10 @@ export default function EditorPage({ project, onExit }: Props) {
         ),
       });
       setSaveState('未保存');
-      if (finished && transformStartRef.current) {
-        setUndoStack((stack) => [...stack.slice(-49), transformStartRef.current!]);
+      const transformStart = transformStartRef.current;
+      if (finished && transformStart) {
+        // Capture before clearing the ref. React may execute the state updater asynchronously.
+        setUndoStack((stack) => [...stack.slice(-49), transformStart]);
         setRedoStack([]);
         transformStartRef.current = null;
       }
@@ -790,14 +953,57 @@ export default function EditorPage({ project, onExit }: Props) {
               </div>
             </>
           ) : (
-            <div className="asset-empty">
-              <Upload size={24} />
-              <strong>暂无本地资源</strong>
-              <span>支持 GLB、GLTF、PNG、JPG</span>
-              <button className="outline-button" disabled title="资源上传将在后续版本提供">
+            <div className="asset-panel">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".glb,.gltf,.png,.jpg,.jpeg,.webp,model/gltf-binary,model/gltf+json,image/png,image/jpeg"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) void handleUpload(file);
+                }}
+              />
+              <button
+                className="outline-button asset-upload-button"
+                onClick={() => fileInputRef.current?.click()}
+              >
                 <Upload size={14} />
                 上传资源
               </button>
+              {assets.length ? (
+                <div className="asset-list">
+                  {assets.map((asset) => (
+                    <button
+                      className="asset-card"
+                      key={asset.id}
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = 'copy';
+                        event.dataTransfer.setData('asset-id', asset.id);
+                      }}
+                      onClick={() => addAssetNode(asset)}
+                      title="点击添加，或拖到画布指定位置"
+                    >
+                      <span className="asset-preview" aria-hidden="true">
+                        {asset.kind === 'image' ? <img src={asset.url} alt="" /> : <span>3D</span>}
+                      </span>
+                      <span className="asset-copy">
+                        <strong>{asset.name}</strong>
+                        <small>{formatBytes(asset.size)} · 点击或拖拽添加</small>
+                      </span>
+                      <Plus size={14} />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="asset-empty">
+                  <Upload size={24} />
+                  <strong>暂无本地资源</strong>
+                  <span>支持 GLB、GLTF、PNG、JPG、WebP</span>
+                </div>
+              )}
             </div>
           )}
           <div className="panel-section-title">
@@ -899,6 +1105,7 @@ export default function EditorPage({ project, onExit }: Props) {
               gridVisible={gridVisible}
               onSelect={setSelectedId}
               onDropKind={addNode}
+              onDropAsset={dropAssetNode}
               onTransformStart={handleTransformStart}
               onTransform={handleTransform}
               onRuntimeError={logError}
@@ -961,7 +1168,10 @@ export default function EditorPage({ project, onExit }: Props) {
                 >
                   属性
                 </button>
-                <button disabled title="数据绑定规划中">
+                <button
+                  className={inspectorTab === 'data' ? 'active' : ''}
+                  onClick={() => setInspectorTab('data')}
+                >
                   数据
                 </button>
                 <button
@@ -975,6 +1185,26 @@ export default function EditorPage({ project, onExit }: Props) {
               </div>
               {inspectorTab === 'properties' ? (
                 <Inspector selected={selected} setNode={setNode} />
+              ) : inspectorTab === 'data' ? (
+                <DataSourcePanel
+                  selected={selected}
+                  sources={scene.dataSources ?? []}
+                  status={dataSourceStatus}
+                  onAddSource={addDataSource}
+                  onPatchSource={patchDataSource}
+                  onDeleteSource={deleteDataSource}
+                  onAddBinding={addDataBinding}
+                  onDeleteBinding={deleteDataBinding}
+                  onTestSource={async (source) => {
+                    setDataSourceStatus('测试中…');
+                    try {
+                      await testDataSource(source);
+                      setDataSourceStatus('连接成功');
+                    } catch (error) {
+                      setDataSourceStatus(error instanceof Error ? error.message : '连接失败');
+                    }
+                  }}
+                />
               ) : (
                 <EventRuleList
                   scope="node"
@@ -1290,6 +1520,194 @@ function Inspector({
 }
 
 /** 底部场景编排区：时间轴和场景级事件都作用于整个画布。 */
+function DataSourcePanel({
+  selected,
+  sources,
+  status,
+  onAddSource,
+  onPatchSource,
+  onDeleteSource,
+  onAddBinding,
+  onDeleteBinding,
+  onTestSource,
+}: {
+  selected: SceneNode;
+  sources: SceneDataSource[];
+  status: string | null;
+  onAddSource: () => void;
+  onPatchSource: (id: string, patch: Partial<SceneDataSource>) => void;
+  onDeleteSource: (id: string) => void;
+  onAddBinding: (binding: Omit<SceneDataBinding, 'id'>) => void;
+  onDeleteBinding: (id: string) => void;
+  onTestSource: (source: SceneDataSource) => Promise<void>;
+}) {
+  const [sourceId, setSourceId] = useState(sources[0]?.id ?? '');
+  const [path, setPath] = useState('value');
+  const [property, setProperty] = useState<SceneDataBindingProperty>('value');
+  const source = sources.find((item) => item.id === sourceId) ?? sources[0];
+  useEffect(() => {
+    if (source && !sources.some((item) => item.id === sourceId)) setSourceId(source.id);
+  }, [source, sourceId, sources]);
+  return (
+    <div className="inspector-body data-source-panel">
+      <div className="data-source-head">
+        <span className="section-label">数据源</span>
+        <button className="icon-button" onClick={onAddSource} title="添加数据源">
+          <Plus size={14} />
+        </button>
+      </div>
+      {sources.length ? (
+        <>
+          <select value={source?.id ?? ''} onChange={(event) => setSourceId(event.target.value)}>
+            {sources.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+          {source && (
+            <>
+              <label className="field-label">
+                名称
+                <input
+                  value={source.name}
+                  onChange={(event) => onPatchSource(source.id, { name: event.target.value })}
+                />
+              </label>
+              <label className="field-label">
+                类型
+                <select
+                  value={source.type}
+                  onChange={(event) =>
+                    onPatchSource(source.id, {
+                      type: event.target.value as SceneDataSource['type'],
+                    })
+                  }
+                >
+                  <option value="json">静态 JSON</option>
+                  <option value="rest">REST GET</option>
+                  <option value="websocket">WebSocket</option>
+                </select>
+              </label>
+              {source.type === 'json' ? (
+                <label className="field-label">
+                  JSON
+                  <textarea
+                    value={source.json ?? ''}
+                    onChange={(event) => onPatchSource(source.id, { json: event.target.value })}
+                    rows={4}
+                  />
+                </label>
+              ) : (
+                <label className="field-label">
+                  地址
+                  <input
+                    value={source.url ?? ''}
+                    onChange={(event) => onPatchSource(source.id, { url: event.target.value })}
+                    placeholder={source.type === 'websocket' ? 'wss://...' : 'https://...'}
+                  />
+                </label>
+              )}
+              <label className="field-label">
+                刷新间隔（秒）
+                <input
+                  type="number"
+                  min="1"
+                  max="3600"
+                  value={source.refreshInterval ?? 10}
+                  onChange={(event) =>
+                    onPatchSource(source.id, { refreshInterval: Number(event.target.value) })
+                  }
+                />
+              </label>
+              <div className="data-source-actions">
+                <button className="outline-button" onClick={() => void onTestSource(source)}>
+                  测试连接
+                </button>
+                <button
+                  className="icon-button"
+                  onClick={() => onDeleteSource(source.id)}
+                  title="删除数据源"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              {status && <div className="data-source-status">{status}</div>}
+              <div className="field-section">
+                <div className="section-label">
+                  <span>绑定到当前对象</span>
+                </div>
+                <label className="field-label">
+                  数据路径
+                  <input
+                    value={path}
+                    onChange={(event) => setPath(event.target.value)}
+                    placeholder="data.value"
+                  />
+                </label>
+                <label className="field-label">
+                  目标属性
+                  <select
+                    value={property}
+                    onChange={(event) =>
+                      setProperty(event.target.value as SceneDataBindingProperty)
+                    }
+                  >
+                    <option value="value">数值</option>
+                    <option value="text">文本</option>
+                    <option value="color">颜色</option>
+                    <option value="opacity">透明度</option>
+                    <option value="visible">可见性</option>
+                  </select>
+                </label>
+                <button
+                  className="outline-button"
+                  onClick={() =>
+                    onAddBinding({ sourceId: source.id, path: path.trim() || 'value', property })
+                  }
+                >
+                  添加绑定
+                </button>
+                <div className="binding-list">
+                  {(selected.dataBindings ?? []).map((binding) => (
+                    <div className="binding-row" key={binding.id}>
+                      <span>
+                        {binding.property} ← {binding.path}
+                      </span>
+                      <button
+                        className="icon-button"
+                        onClick={() => onDeleteBinding(binding.id)}
+                        title="删除绑定"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      ) : (
+        <div className="inspector-empty">
+          <strong>暂无数据源</strong>
+          <span>点击右上角添加 JSON 或 REST 数据源</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function resolveDataPath(value: unknown, path: string): unknown {
+  if (!path.trim()) return value;
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (current === null || current === undefined) return undefined;
+    if (Array.isArray(current) && /^\d+$/.test(key)) return current[Number(key)];
+    if (typeof current === 'object') return (current as Record<string, unknown>)[key];
+    return undefined;
+  }, value);
+}
+
 function BottomPanel({
   tab,
   setTab,
@@ -1866,7 +2284,7 @@ function RuntimeView({
   };
   const today = new Date().toLocaleDateString('zh-CN');
   const [runtimeOverrides, setRuntimeOverrides] = useState<
-    Record<string, Partial<Pick<SceneNode, 'color' | 'visible' | 'opacity'>>>
+    Record<string, Partial<Pick<SceneNode, 'color' | 'visible' | 'opacity' | 'value' | 'text'>>>
   >({});
   const [focusRequest, setFocusRequest] = useState<CameraFocusRequest | null>(null);
   const [runtimePopup, setRuntimePopup] = useState<{
@@ -1965,6 +2383,75 @@ function RuntimeView({
     setRuntimeTimelineTime(0);
     window.clearTimeout(focusClearTimerRef.current);
   }, [scene]);
+
+  useEffect(() => {
+    const sources = scene.dataSources ?? [];
+    const timers: number[] = [];
+    const sockets: WebSocket[] = [];
+    let cancelled = false;
+    const consume = (source: SceneDataSource, data: unknown) => {
+      if (cancelled) return;
+      setRuntimeOverrides((current) => {
+        const next = { ...current };
+        scene.nodes.forEach((node) => {
+          node.dataBindings
+            ?.filter((binding) => binding.sourceId === source.id)
+            .forEach((binding) => {
+              const value = resolveDataPath(data, binding.path);
+              if (value === undefined) return;
+              const patch = { ...(next[node.id] ?? {}) };
+              if (binding.property === 'value' && typeof value === 'number') patch.value = value;
+              if (binding.property === 'text') patch.text = String(value);
+              if (binding.property === 'color' && typeof value === 'string') patch.color = value;
+              if (binding.property === 'opacity' && typeof value === 'number')
+                patch.opacity = Math.max(0, Math.min(1, value));
+              if (binding.property === 'visible') patch.visible = Boolean(value);
+              next[node.id] = patch;
+            });
+        });
+        return next;
+      });
+    };
+    const load = async (source: SceneDataSource) => {
+      try {
+        const data = await testDataSource(source);
+        consume(source, data);
+      } catch (error) {
+        onError(
+          error instanceof Error
+            ? `${source.name}: ${error.message}`
+            : `${source.name}: 数据读取失败`,
+        );
+      }
+    };
+    sources.forEach((source) => {
+      if (source.type === 'websocket' && source.url) {
+        try {
+          const socket = new WebSocket(source.url);
+          socket.onmessage = (event) => {
+            try {
+              consume(source, JSON.parse(event.data));
+            } catch {
+              onError(`${source.name}: WebSocket 返回的不是 JSON`);
+            }
+          };
+          socket.onerror = () => onError(`${source.name}: WebSocket 连接失败`);
+          sockets.push(socket);
+        } catch (error) {
+          onError(error instanceof Error ? error.message : `${source.name}: WebSocket 连接失败`);
+        }
+      } else {
+        void load(source);
+        const interval = Math.max(1, source.refreshInterval ?? 10) * 1000;
+        timers.push(window.setInterval(() => void load(source), interval));
+      }
+    });
+    return () => {
+      cancelled = true;
+      timers.forEach((timer) => window.clearInterval(timer));
+      sockets.forEach((socket) => socket.close());
+    };
+  }, [onError, scene]);
 
   useEffect(() => () => window.clearTimeout(focusClearTimerRef.current), []);
 

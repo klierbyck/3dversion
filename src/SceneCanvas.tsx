@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { NodeKind, SceneCameraKeyframe, SceneNode, TransformMode } from './types';
 
 type TransformPatch = Pick<SceneNode, 'position' | 'rotation' | 'scale'>;
@@ -12,7 +13,10 @@ type Props = {
   mode?: TransformMode;
   gridVisible?: boolean;
   readOnly?: boolean;
-  runtimeOverrides?: Record<string, Partial<Pick<SceneNode, 'color' | 'visible' | 'opacity'>>>;
+  runtimeOverrides?: Record<
+    string,
+    Partial<Pick<SceneNode, 'color' | 'visible' | 'opacity' | 'value' | 'text'>>
+  >;
   focusRequest?: CameraFocusRequest | null;
   cameraView?: SceneCameraKeyframe | null;
   onSelect: (id: string | null) => void;
@@ -20,6 +24,7 @@ type Props = {
   onNodeDoubleClick?: (id: string) => void;
   onNodeHover?: (id: string | null) => void;
   onDropKind?: (kind: NodeKind, position: [number, number, number]) => void;
+  onDropAsset?: (assetId: string, position: [number, number, number]) => void;
   onTransform?: (id: string, patch: TransformPatch, finished: boolean) => void;
   onTransformStart?: () => void;
   onRuntimeError: (message: string) => void;
@@ -39,6 +44,7 @@ export default function SceneCanvas({
   onNodeDoubleClick,
   onNodeHover,
   onDropKind,
+  onDropAsset,
   onTransform,
   onTransformStart,
   onRuntimeError,
@@ -54,6 +60,8 @@ export default function SceneCanvas({
   const selectedIdRef = useRef(selectedId);
   const hoveredIdRef = useRef<string | null>(null);
   const transformCallbacksRef = useRef({ onTransform, onTransformStart });
+  const gltfLoaderRef = useRef(new GLTFLoader());
+  const textureLoaderRef = useRef(new THREE.TextureLoader());
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -207,6 +215,77 @@ export default function SceneCanvas({
         objectsRef.current.set(node.id, object);
         scene.add(object);
       }
+      if (node.kind === 'model' && node.assetPath && object.userData.assetPath !== node.assetPath) {
+        object.userData.assetPath = node.assetPath;
+        const root = object;
+        gltfLoaderRef.current.load(
+          node.assetPath,
+          (gltf) => {
+            if (
+              objectsRef.current.get(node.id) !== root ||
+              root.userData.assetPath !== node.assetPath
+            ) {
+              disposeObject(gltf.scene);
+              return;
+            }
+            root.children.forEach((child) => disposeObject(child));
+            while (root.children.length) root.remove(root.children[0]);
+            const model = gltf.scene;
+            model.traverse((child) => {
+              child.userData.nodeId = node.id;
+              if (child instanceof THREE.Mesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+              }
+            });
+            root.add(model);
+          },
+          undefined,
+          (error) =>
+            onRuntimeError(
+              `模型 ${node.name} 加载失败: ${error instanceof Error ? error.message : '资源无效'}`,
+            ),
+        );
+      }
+      if (node.kind === 'image' && node.assetPath && object.userData.assetPath !== node.assetPath) {
+        object.userData.assetPath = node.assetPath;
+        const root = object;
+        textureLoaderRef.current.load(
+          node.assetPath,
+          (texture) => {
+            if (
+              objectsRef.current.get(node.id) !== root ||
+              root.userData.assetPath !== node.assetPath
+            ) {
+              texture.dispose();
+              return;
+            }
+            texture.colorSpace = THREE.SRGBColorSpace;
+            const source = texture.image as { width?: number; height?: number };
+            const aspect = Math.max(0.25, Math.min(4, (source.width ?? 1) / (source.height ?? 1)));
+            const height = 2.4;
+            const image = new THREE.Mesh(
+              new THREE.PlaneGeometry(height * aspect, height),
+              new THREE.MeshBasicMaterial({
+                map: texture,
+                transparent: true,
+                side: THREE.DoubleSide,
+                toneMapped: false,
+              }),
+            );
+            image.position.y = height / 2;
+            image.userData.nodeId = node.id;
+            root.children.forEach((child) => disposeObject(child));
+            while (root.children.length) root.remove(root.children[0]);
+            root.add(image);
+          },
+          undefined,
+          (error) =>
+            onRuntimeError(
+              `图片 ${node.name} 加载失败: ${error instanceof Error ? error.message : '资源无效'}`,
+            ),
+        );
+      }
       object.position.set(...node.position);
       object.rotation.set(
         ...(node.rotation.map(THREE.MathUtils.degToRad) as [number, number, number]),
@@ -215,6 +294,7 @@ export default function SceneCanvas({
       const override = runtimeOverrides[node.id];
       const effectiveColor = override?.color ?? node.color;
       const effectiveOpacity = override?.opacity ?? node.opacity;
+      const effectiveValue = override?.value ?? node.value;
       object.visible = override?.visible ?? node.visible;
       object.traverse((child) => {
         if (!(child instanceof THREE.Mesh)) return;
@@ -225,8 +305,13 @@ export default function SceneCanvas({
           child.material.opacity = effectiveOpacity ?? 1;
           child.material.transparent = (effectiveOpacity ?? 1) < 1;
         }
+        if (node.kind === 'image' && child.material instanceof THREE.MeshBasicMaterial) {
+          child.material.color.set(effectiveColor ?? '#ffffff');
+          child.material.opacity = effectiveOpacity ?? 1;
+          child.material.transparent = true;
+        }
       });
-      if (node.kind === 'bar') object.scale.y = Math.max(0.15, (node.value ?? 50) / 50);
+      if (node.kind === 'bar') object.scale.y = Math.max(0.15, (effectiveValue ?? 50) / 50);
     });
   }, [nodes, runtimeOverrides]);
 
@@ -319,15 +404,18 @@ export default function SceneCanvas({
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const kind = event.dataTransfer.getData('component-kind') as NodeKind;
+    const assetId = event.dataTransfer.getData('asset-id');
     const camera = cameraRef.current;
     const renderer = rendererRef.current;
-    if (!kind || !camera || !renderer || !onDropKind) return;
+    if ((!kind && !assetId) || !camera || !renderer) return;
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointerFromEvent(event, renderer.domElement), camera);
     const point = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), point))
       camera.getWorldDirection(point).multiplyScalar(5).add(camera.position);
-    onDropKind(kind, [snap(point.x), 0, snap(point.z)]);
+    const position: [number, number, number] = [snap(point.x), 0, snap(point.z)];
+    if (kind) onDropKind?.(kind, position);
+    else if (assetId) onDropAsset?.(assetId, position);
   };
 
   return (
@@ -376,7 +464,10 @@ function disposeObject(object: THREE.Object3D) {
     if (child instanceof THREE.Mesh) {
       child.geometry.dispose();
       const materials = Array.isArray(child.material) ? child.material : [child.material];
-      materials.forEach((material) => material.dispose());
+      materials.forEach((material) => {
+        if ('map' in material && material.map instanceof THREE.Texture) material.map.dispose();
+        material.dispose();
+      });
     }
   });
 }
@@ -442,6 +533,7 @@ function buildObject(node: SceneNode): THREE.Object3D {
     item.rotation.x = -Math.PI / 2;
     return group(item);
   }
+  if (node.kind === 'image') return group(box([2.4, 1.6, 0.04], '#173d3a', [0, 0.8, 0], false));
   if (node.kind === 'bar') return group(box([0.8, 2, 0.8], color, [0, 1, 0], true));
   if (node.kind === 'building') return buildBuilding(color);
   if (node.kind === 'office') return buildOffice(color);

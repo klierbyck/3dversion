@@ -8,11 +8,13 @@ V1 使用内存数据存储，便于开发环境零依赖启动；生产部署�
 """
 
 import os
+import mimetypes
+from urllib.parse import unquote
 from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -51,6 +53,15 @@ class ProjectPayload(BaseModel):
     description: str = ""
 
 
+class DataSourcePayload(BaseModel):
+    type: str
+    url: str | None = None
+    method: str = "GET"
+    headers: dict[str, str] = {}
+    json: str | None = None
+    timeout: int = Field(default=10, ge=1, le=60)
+
+
 def _new_project(project_id: str, name: str, description: str, is_demo: bool) -> dict:
     return {
         "id": project_id,
@@ -63,6 +74,8 @@ def _new_project(project_id: str, name: str, description: str, is_demo: bool) ->
         "revision": 0,
         "releases": [],
         "errors": [],
+        "assets": [],
+        "asset_content": {},
     }
 
 
@@ -222,6 +235,87 @@ def report_error(payload: RuntimeErrorPayload):
         projects[payload.projectId] = project
     project["errors"].append(payload.model_dump())
     return response({"received": True})
+
+
+@app.get("/api/projects/{project_id}/assets")
+def list_assets(project_id: str):
+    project = projects.get(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    return response(project.get("assets", []))
+
+
+@app.post("/api/projects/{project_id}/assets")
+async def upload_asset(project_id: str, request: Request):
+    project = projects.get(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    allowed = {
+        "model/gltf-binary",
+        "model/gltf+json",
+        "application/octet-stream",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+    }
+    filename = unquote(request.headers.get("x-file-name", "asset"))
+    content_type = request.headers.get("content-type", "") or mimetypes.guess_type(filename)[0] or ""
+    if content_type not in allowed:
+        raise HTTPException(415, "仅支持 GLB、GLTF、PNG、JPG、WebP 资源")
+    content = await request.body()
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(413, "资源大小不能超过 100MB")
+    asset_id = str(uuid4())
+    kind = "image" if content_type.startswith("image/") else "model"
+    asset = {
+        "id": asset_id,
+        "projectId": project_id,
+        "name": filename,
+        "mimeType": content_type,
+        "size": len(content),
+        "kind": kind,
+        "url": f"/api/assets/{asset_id}/content",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    project.setdefault("assets", []).append(asset)
+    project.setdefault("asset_content", {})[asset_id] = content
+    return response(asset)
+
+
+@app.get("/api/assets/{asset_id}/content")
+def asset_content(asset_id: str):
+    for project in projects.values():
+        content = project.get("asset_content", {}).get(asset_id)
+        if content is not None:
+            asset = next((item for item in project.get("assets", []) if item["id"] == asset_id), None)
+            from fastapi.responses import Response
+
+            return Response(content=content, media_type=(asset or {}).get("mimeType", "application/octet-stream"))
+    raise HTTPException(404, "资源不存在")
+
+
+@app.get("/api/assets/{asset_id}")
+def get_asset(asset_id: str):
+    for project in projects.values():
+        asset = next((item for item in project.get("assets", []) if item["id"] == asset_id), None)
+        if asset:
+            return response(asset)
+    raise HTTPException(404, "资源不存在")
+
+
+@app.post("/api/data-sources/test")
+async def test_data_source(payload: DataSourcePayload):
+    if payload.type == "json":
+        import json
+
+        try:
+            return response({"ok": True, "data": json.loads(payload.json or "{}")})
+        except json.JSONDecodeError as exc:
+            raise HTTPException(400, f"JSON 数据无效: {exc.msg}") from exc
+    if payload.type not in {"rest", "websocket"} or not payload.url:
+        raise HTTPException(400, "数据源类型或地址无效")
+    # 网络访问由浏览器端执行；后端接口负责校验配置并返回可用状态。
+    return response({"ok": True, "message": "数据源配置有效，请在浏览器端读取快照"})
 
 
 @app.get("/api/projects/{project_id}/errors")

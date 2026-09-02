@@ -3,6 +3,7 @@ export type NodeKind =
   | 'box'
   | 'sphere'
   | 'plane'
+  | 'image'
   | 'model'
   | 'text'
   | 'light'
@@ -43,6 +44,43 @@ export type SceneNode = {
   text?: string;
   value?: number;
   assetPath?: string;
+  dataBindings?: SceneDataBinding[];
+};
+
+export type AssetKind = 'model' | 'image';
+
+export type AssetMeta = {
+  id: string;
+  projectId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: AssetKind;
+  url: string;
+  createdAt: string;
+};
+
+export type DataSourceType = 'json' | 'rest' | 'websocket';
+
+export type SceneDataSource = {
+  id: string;
+  name: string;
+  type: DataSourceType;
+  url?: string;
+  method?: 'GET';
+  headers?: Record<string, string>;
+  json?: string;
+  refreshInterval?: number;
+  timeout?: number;
+};
+
+export type SceneDataBindingProperty = 'value' | 'text' | 'color' | 'opacity' | 'visible';
+
+export type SceneDataBinding = {
+  id: string;
+  sourceId: string;
+  path: string;
+  property: SceneDataBindingProperty;
 };
 
 export type SceneEventTriggerType = 'click' | 'doubleClick' | 'hover' | 'sceneLoad';
@@ -106,6 +144,7 @@ export type SceneTimeline = {
 export type SceneDocument = {
   schemaVersion: string;
   nodes: SceneNode[];
+  dataSources?: SceneDataSource[];
   /** 事件规则：用于运行态点击/悬停/加载后触发相机聚焦、弹窗、变色、显隐等动作。 */
   events?: SceneEventRule[];
   /** 场景级关键帧动画配置；未配置时按 15 秒循环场景处理。 */
@@ -376,7 +415,7 @@ export function createNode(
     position: position ?? [index * 1.8 - 2, 0, 0],
     rotation: [0, 0, 0],
     scale: defaults[kind] ?? [1, 1, 1],
-    color: meta?.color ?? (kind === 'light' ? '#ffd166' : '#34d399'),
+    color: meta?.color ?? (kind === 'light' ? '#ffd166' : kind === 'image' ? '#ffffff' : '#34d399'),
     opacity: 1,
     text: kind === 'text' || kind === 'label' ? '设备状态' : undefined,
     value: kind === 'bar' || kind === 'label' || kind === 'sensor' ? 72 : undefined,

@@ -5,6 +5,8 @@ import {
   type Release,
   type RuntimeError,
   type SceneDocument,
+  type AssetMeta,
+  type SceneDataSource,
 } from './types';
 
 // 未配置后端地址时直接使用本地持久化，避免独立运行前端产生无意义的网络错误。
@@ -19,6 +21,7 @@ type StoredProject = {
   draft: SceneDocument;
   revision: number;
   releases: Release[];
+  assets?: AssetMeta[];
 };
 type ProjectStore = Record<string, StoredProject>;
 
@@ -398,5 +401,131 @@ export async function reportRuntimeError(
     });
   } catch {
     /* 运行态错误不上抛，避免影响用户查看场景。 */
+  }
+}
+
+function assetKind(file: File): AssetMeta['kind'] {
+  return file.type.startsWith('image/') ? 'image' : 'model';
+}
+
+function normalizeAssetUrl(url: string): string {
+  if (!API_BASE || !/^https?:\/\//.test(API_BASE) || /^(data:|blob:|https?:\/\/)/.test(url))
+    return url;
+  return new URL(url, API_BASE).toString();
+}
+
+function localAssets(projectId: string): AssetMeta[] {
+  return readStore()[projectId]?.assets ?? [];
+}
+
+export async function listAssets(projectId: string): Promise<AssetMeta[]> {
+  if (API_BASE) {
+    try {
+      const response = await fetch(`${API_BASE}/projects/${projectId}/assets`);
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data.data)) {
+          return (data.data as AssetMeta[]).map((asset) => ({
+            ...asset,
+            url: normalizeAssetUrl(asset.url),
+          }));
+        }
+      }
+    } catch {
+      /* fallback to browser storage */
+    }
+  }
+  return localAssets(projectId);
+}
+
+export async function uploadAsset(projectId: string, file: File): Promise<AssetMeta> {
+  if (API_BASE) {
+    try {
+      const content = await file.arrayBuffer();
+      const response = await fetch(`${API_BASE}/projects/${projectId}/assets`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-File-Name': encodeURIComponent(file.name),
+        },
+        body: content,
+      });
+      if (response.ok) {
+        const asset = (await response.json()).data as AssetMeta;
+        return { ...asset, url: normalizeAssetUrl(asset.url) };
+      }
+      const detail = await response.text();
+      throw new Error(detail || `资源上传失败：HTTP ${response.status}`);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        /* API unavailable: retain a browser-only data URL asset. */
+      } else {
+        throw error;
+      }
+    }
+  }
+  const url = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('资源读取失败'));
+    reader.readAsDataURL(file);
+  });
+  const asset: AssetMeta = {
+    id: `asset-${uid()}`,
+    projectId,
+    name: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    size: file.size,
+    kind: assetKind(file),
+    url,
+    createdAt: new Date().toISOString(),
+  };
+  const store = readStore();
+  const project = store[projectId];
+  if (project) {
+    store[projectId] = { ...project, assets: [...(project.assets ?? []), asset] };
+    writeStore(store);
+  }
+  return asset;
+}
+
+export async function testDataSource(source: SceneDataSource): Promise<unknown> {
+  if (source.type === 'json') {
+    return JSON.parse(source.json || '{}');
+  }
+  if (!source.url) throw new Error('请填写数据源地址');
+  if (source.type === 'websocket') {
+    return await new Promise((resolve, reject) => {
+      const socket = new WebSocket(source.url!);
+      const timer = window.setTimeout(
+        () => {
+          socket.close();
+          reject(new Error('WebSocket 连接超时'));
+        },
+        (source.timeout ?? 10) * 1000,
+      );
+      socket.onopen = () => {
+        window.clearTimeout(timer);
+        socket.close();
+        resolve({ connected: true });
+      };
+      socket.onerror = () => {
+        window.clearTimeout(timer);
+        reject(new Error('WebSocket 连接失败'));
+      };
+    });
+  }
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), (source.timeout ?? 10) * 1000);
+  try {
+    const response = await fetch(source.url, {
+      method: 'GET',
+      headers: source.headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`数据请求失败：HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    window.clearTimeout(timer);
   }
 }

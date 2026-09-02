@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { NodeKind, SceneCameraKeyframe, SceneNode, TransformMode } from './types';
-import { buildObject, disposeObject } from './sceneObjects';
+import { buildObject, disposeObject, updateObjectText } from './sceneObjects';
 
 type TransformPatch = Pick<SceneNode, 'position' | 'rotation' | 'scale'>;
 export type CameraFocusRequest = { nodeId: string; nonce: number };
@@ -296,7 +296,9 @@ export default function SceneCanvas({
       const effectiveColor = override?.color ?? node.color;
       const effectiveOpacity = override?.opacity ?? node.opacity;
       const effectiveValue = override?.value ?? node.value;
+      const effectiveText = override?.text ?? node.text ?? node.name;
       object.visible = override?.visible ?? node.visible;
+      updateObjectText(object, effectiveText);
       object.traverse((child) => {
         if (!(child instanceof THREE.Mesh)) return;
         child.castShadow = node.kind !== 'road' && node.kind !== 'plane';

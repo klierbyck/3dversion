@@ -3,6 +3,7 @@ import {
   type NodeKind,
   type ProjectMeta,
   type SceneCameraKeyframe,
+  type SceneDataBindingProperty,
   type SceneDocument,
   type SceneEventRule,
   type SceneKeyframe,
@@ -116,6 +117,58 @@ type DemoEventSpec = {
   color?: string;
   visible?: boolean;
 };
+
+type DemoDataBindingSpec = {
+  nodeName: string;
+  path: string;
+  property: SceneDataBindingProperty;
+};
+
+type DemoDataConfig = {
+  sourceName: string;
+  data: Record<string, unknown>;
+  bindings: DemoDataBindingSpec[];
+};
+
+/** 给内置示例挂载可直接运行的静态数据源，并按节点名称生成稳定绑定。 */
+function sceneWithDemoData(
+  scene: SceneDocument,
+  projectId: string,
+  config: DemoDataConfig,
+): SceneDocument {
+  const sourceId = `${projectId}-live-data`;
+  const bindingsByNodeId = new Map<string, Array<DemoDataBindingSpec & { bindingIndex: number }>>();
+  const idByName = new Map(scene.nodes.map((node) => [node.name, node.id]));
+  config.bindings.forEach((binding, bindingIndex) => {
+    const nodeId = idByName.get(binding.nodeName);
+    if (!nodeId) throw new Error(`Demo data binding node not found: ${binding.nodeName}`);
+    bindingsByNodeId.set(nodeId, [
+      ...(bindingsByNodeId.get(nodeId) ?? []),
+      { ...binding, bindingIndex },
+    ]);
+  });
+  return {
+    ...scene,
+    dataSources: [
+      {
+        id: sourceId,
+        name: config.sourceName,
+        type: 'json',
+        json: JSON.stringify(config.data, null, 2),
+        refreshInterval: 10,
+      },
+    ],
+    nodes: scene.nodes.map((node) => ({
+      ...node,
+      dataBindings: (bindingsByNodeId.get(node.id) ?? []).map((binding) => ({
+        id: `${sourceId}-binding-${binding.bindingIndex + 1}`,
+        sourceId,
+        path: binding.path,
+        property: binding.property,
+      })),
+    })),
+  };
+}
 
 const vector = (x: number, y: number, z: number): [number, number, number] => [x, y, z];
 
@@ -340,7 +393,7 @@ function sceneWithEvents(scene: SceneDocument, specs: DemoEventSpec[]): SceneDoc
  * 示例项目目录：项目列表、编辑器初始场景、运行态大屏配置共用这一份数据。
  * demo-park 沿用历史 ID，保证旧版本保存过的草稿仍能对上项目。
  */
-export const demoProjects: DemoProject[] = [
+const demoProjectSeeds: DemoProject[] = [
   {
     id: 'demo-park',
     name: '智慧园区态势中心',
@@ -578,12 +631,98 @@ export const demoProjects: DemoProject[] = [
   },
 ];
 
+const demoDataConfigs: Record<string, DemoDataConfig> = {
+  'demo-park': {
+    sourceName: '园区实时态势数据',
+    data: {
+      campus: {
+        operationCenterColor: '#0ea5e9',
+        parkingCanopyOpacity: 0.46,
+        patrolVehicleVisible: false,
+      },
+    },
+    bindings: [
+      { nodeName: '园区运营中心', path: 'campus.operationCenterColor', property: 'color' },
+      { nodeName: '低碳停车棚A区', path: 'campus.parkingCanopyOpacity', property: 'opacity' },
+      { nodeName: '安防巡逻车', path: 'campus.patrolVehicleVisible', property: 'visible' },
+    ],
+  },
+  'demo-energy': {
+    sourceName: '电站实时运行数据',
+    data: {
+      station: {
+        windPower: 94,
+        totalPowerText: '实时总功率 24.6 MW',
+        titleText: '风光储一体化电站',
+        turbineColor: '#ef4444',
+        solarOpacity: 0.42,
+        warningVisible: true,
+      },
+    },
+    bindings: [
+      { nodeName: '风电功率', path: 'station.windPower', property: 'value' },
+      { nodeName: '实时总功率', path: 'station.totalPowerText', property: 'text' },
+      { nodeName: '风光储一体化电站', path: 'station.titleText', property: 'text' },
+      { nodeName: '1号风机', path: 'station.turbineColor', property: 'color' },
+      { nodeName: '光伏阵列A1', path: 'station.solarOpacity', property: 'opacity' },
+      { nodeName: '1号风机预警', path: 'station.warningVisible', property: 'visible' },
+    ],
+  },
+  'demo-factory': {
+    sourceName: '工厂生产监测数据',
+    data: {
+      production: {
+        lineYield: 68,
+        outputText: '今日产量 1,842 件',
+        titleText: '智能工厂数字孪生',
+        vibrationColor: '#f43f5e',
+        tankOpacity: 0.38,
+        alertVisible: true,
+      },
+    },
+    bindings: [
+      { nodeName: '1线良率', path: 'production.lineYield', property: 'value' },
+      { nodeName: '今日产量看板', path: 'production.outputText', property: 'text' },
+      { nodeName: '智能工厂数字孪生', path: 'production.titleText', property: 'text' },
+      { nodeName: '设备振动监测', path: 'production.vibrationColor', property: 'color' },
+      { nodeName: '原料储罐2号', path: 'production.tankOpacity', property: 'opacity' },
+      { nodeName: '3号产线OEE预警', path: 'production.alertVisible', property: 'visible' },
+    ],
+  },
+  'demo-logistics': {
+    sourceName: '物流园吞吐调度数据',
+    data: {
+      logistics: {
+        warehouseThroughput: 96,
+        inboundText: '今日入库 326 车',
+        titleText: '智慧物流园',
+        coldChainColor: '#38bdf8',
+        warehouseOpacity: 0.48,
+        congestionVisible: false,
+      },
+    },
+    bindings: [
+      { nodeName: '2号库吞吐', path: 'logistics.warehouseThroughput', property: 'value' },
+      { nodeName: '今日入库看板', path: 'logistics.inboundText', property: 'text' },
+      { nodeName: '智慧物流园', path: 'logistics.titleText', property: 'text' },
+      { nodeName: '冷链温控', path: 'logistics.coldChainColor', property: 'color' },
+      { nodeName: '3号库', path: 'logistics.warehouseOpacity', property: 'opacity' },
+      { nodeName: '月台B拥堵预警', path: 'logistics.congestionVisible', property: 'visible' },
+    ],
+  },
+};
+
+export const demoProjects: DemoProject[] = demoProjectSeeds.map((demo) => ({
+  ...demo,
+  scene: sceneWithDemoData(demo.scene, demo.id, demoDataConfigs[demo.id]),
+}));
+
 const demoIndex = new Map(demoProjects.map((demo) => [demo.id, demo]));
 
 function sceneStructureWithoutIds(scene: SceneDocument) {
   return {
     schemaVersion: scene.schemaVersion,
-    nodes: scene.nodes.map(({ id: _id, ...node }) => node),
+    nodes: scene.nodes.map(({ id: _id, dataBindings: _dataBindings, ...node }) => node),
   };
 }
 
@@ -614,10 +753,23 @@ export function upgradeDemoScene(
   const normalized = normalizeSceneDocument(scene);
   const normalizedTimeline = normalizeTimeline(scene.timeline);
   // 兼容旧版示例草稿：节点未被编辑时补入镜头动画，并将官方关键帧映射到旧草稿节点 ID。
-  if (isCurrentSeed && demo.scene.timeline) {
+  if (isCurrentSeed) {
     const currentIdByDemoId = new Map(
       demo.scene.nodes.map((node, index) => [node.id, scene.nodes[index]?.id ?? node.id]),
     );
+    const needsDemoDataUpgrade =
+      scene.dataSources === undefined && Boolean(demo.scene.dataSources?.length);
+    const sceneWithDataUpgrade = needsDemoDataUpgrade
+      ? {
+          ...normalized,
+          dataSources: demo.scene.dataSources,
+          nodes: normalized.nodes.map((node, index) => ({
+            ...node,
+            dataBindings: demo.scene.nodes[index]?.dataBindings,
+          })),
+        }
+      : normalized;
+    if (!demo.scene.timeline) return sceneWithDataUpgrade;
     const isLegacyDemoMotion = normalizedTimeline.keyframes.some((frame) =>
       frame.id.startsWith('demo-keyframe-'),
     );
@@ -640,12 +792,13 @@ export function upgradeDemoScene(
       keyframes.length > 0 && keyframes.every((frame) => frame.id.startsWith('demo-'));
     const loop = isSystemDemoTimeline ? false : normalizedTimeline.loop;
     if (
+      needsDemoDataUpgrade ||
       keyframes.length !== normalizedTimeline.keyframes.length ||
       cameraKeyframes?.length !== normalizedTimeline.cameraKeyframes?.length ||
       loop !== normalizedTimeline.loop
     ) {
       return {
-        ...normalized,
+        ...sceneWithDataUpgrade,
         timeline: {
           ...normalizedTimeline,
           keyframes,

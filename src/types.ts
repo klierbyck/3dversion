@@ -25,6 +25,20 @@ export type NodeKind =
   | 'conveyor'
   | 'gantryCrane'
   | 'truck'
+  | 'car'
+  | 'bus'
+  | 'forklift'
+  | 'trafficLight'
+  | 'parkingGate'
+  | 'streetLight'
+  | 'fence'
+  | 'securityBooth'
+  | 'fireHydrant'
+  | 'chargingPile'
+  | 'pump'
+  | 'valve'
+  | 'transformer'
+  | 'electricalCabinet'
   | 'sensor';
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
@@ -186,7 +200,7 @@ export type ProjectMeta = {
 export type ComponentMeta = {
   kind: NodeKind;
   label: string;
-  category: '基础' | '建筑' | '工业' | '能源' | '数据' | '系统';
+  category: '基础' | '建筑' | '交通' | '设施' | '工业' | '能源' | '数据' | '系统';
   icon: string;
   description: string;
   color?: string;
@@ -270,6 +284,86 @@ export const componentCatalog: ComponentMeta[] = [
     color: '#3f8f62',
   },
   {
+    kind: 'car',
+    label: '小型车辆',
+    category: '交通',
+    icon: '◆',
+    description: '园区巡检及通勤轿车',
+    color: '#3b82f6',
+  },
+  {
+    kind: 'bus',
+    label: '通勤巴士',
+    category: '交通',
+    icon: '▰',
+    description: '园区接驳及员工通勤车',
+    color: '#16a3a5',
+  },
+  {
+    kind: 'forklift',
+    label: '工业叉车',
+    category: '交通',
+    icon: '⊏',
+    description: '仓储装卸搬运叉车',
+    color: '#eab308',
+  },
+  {
+    kind: 'trafficLight',
+    label: '交通信号灯',
+    category: '交通',
+    icon: '⋮',
+    description: '园区路口三色信号灯',
+    color: '#334155',
+  },
+  {
+    kind: 'parkingGate',
+    label: '停车道闸',
+    category: '交通',
+    icon: '⊣',
+    description: '车辆出入口自动栏杆',
+    color: '#e2e8f0',
+  },
+  {
+    kind: 'streetLight',
+    label: '园区路灯',
+    category: '设施',
+    icon: '⌉',
+    description: '道路照明灯杆',
+    color: '#64748b',
+  },
+  {
+    kind: 'fence',
+    label: '安全围栏',
+    category: '设施',
+    icon: '╫',
+    description: '园区及设备区域隔离围栏',
+    color: '#94a3b8',
+  },
+  {
+    kind: 'securityBooth',
+    label: '门卫岗亭',
+    category: '设施',
+    icon: '▣',
+    description: '园区出入口值守岗亭',
+    color: '#cbd5e1',
+  },
+  {
+    kind: 'fireHydrant',
+    label: '消防栓',
+    category: '设施',
+    icon: '♜',
+    description: '室外消防供水设施',
+    color: '#dc2626',
+  },
+  {
+    kind: 'chargingPile',
+    label: '充电桩',
+    category: '设施',
+    icon: 'ϟ',
+    description: '新能源车辆交流充电终端',
+    color: '#0f766e',
+  },
+  {
     kind: 'tank',
     label: '立式储罐',
     category: '工业',
@@ -318,6 +412,22 @@ export const componentCatalog: ComponentMeta[] = [
     color: '#dc5f57',
   },
   {
+    kind: 'pump',
+    label: '工业泵组',
+    category: '工业',
+    icon: '◍',
+    description: '电机、泵体与底座总成',
+    color: '#2563a8',
+  },
+  {
+    kind: 'valve',
+    label: '工艺阀门',
+    category: '工业',
+    icon: '⊗',
+    description: '管线手轮控制阀',
+    color: '#d97706',
+  },
+  {
     kind: 'windTurbine',
     label: '风力机组',
     category: '能源',
@@ -340,6 +450,22 @@ export const componentCatalog: ComponentMeta[] = [
     icon: '⌾',
     description: '设备状态监测点位',
     color: '#38d6b2',
+  },
+  {
+    kind: 'transformer',
+    label: '箱式变电站',
+    category: '能源',
+    icon: '▦',
+    description: '园区箱式变压配电设备',
+    color: '#64748b',
+  },
+  {
+    kind: 'electricalCabinet',
+    label: '配电控制柜',
+    category: '能源',
+    icon: '▤',
+    description: '低压配电与设备控制柜',
+    color: '#475569',
   },
   {
     kind: 'bar',

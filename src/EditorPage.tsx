@@ -91,7 +91,17 @@ function isSceneSnapshot(value: unknown): value is SceneDocument {
   );
 }
 
-const componentCategories = ['全部', '基础', '建筑', '工业', '能源', '数据', '系统'];
+const componentCategories = [
+  '全部',
+  '基础',
+  '建筑',
+  '交通',
+  '设施',
+  '工业',
+  '能源',
+  '数据',
+  '系统',
+];
 
 export default function EditorPage({ project, onExit }: Props) {
   // 无草稿时以示例场景（或空场景）作为编辑起点。

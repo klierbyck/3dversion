@@ -11,6 +11,59 @@ export function disposeObject(object: THREE.Object3D) {
         material.dispose();
       });
     }
+    if (child instanceof THREE.Sprite) {
+      child.material.map?.dispose();
+      child.material.dispose();
+    }
+  });
+}
+
+function createTextTexture(text: string) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 768;
+  canvas.height = 192;
+  const context = canvas.getContext('2d');
+  if (!context) return new THREE.CanvasTexture(canvas);
+  const content = text.trim();
+  let fontSize = 72;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  do {
+    context.font = `600 ${fontSize}px sans-serif`;
+    fontSize -= 4;
+  } while (fontSize > 30 && context.measureText(content).width > canvas.width - 52);
+  context.fillStyle = '#f8fafc';
+  context.fillText(content, canvas.width / 2, canvas.height / 2, canvas.width - 52);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function textSprite(text: string) {
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: createTextTexture(text),
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  sprite.position.set(0, 1.4, 0.05);
+  sprite.scale.set(3.2, 0.8, 1);
+  sprite.renderOrder = 10;
+  sprite.userData.dynamicText = true;
+  sprite.userData.text = text;
+  return sprite;
+}
+
+export function updateObjectText(object: THREE.Object3D, text: string) {
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Sprite) || !child.userData.dynamicText) return;
+    if (child.userData.text === text) return;
+    child.userData.text = text;
+    child.material.map?.dispose();
+    child.material.map = createTextTexture(text);
+    child.material.needsUpdate = true;
   });
 }
 
@@ -91,6 +144,20 @@ export function buildObject(node: SceneNode): THREE.Object3D {
   if (node.kind === 'conveyor') return buildConveyor(color);
   if (node.kind === 'gantryCrane') return buildCrane(color);
   if (node.kind === 'truck') return buildTruck(color);
+  if (node.kind === 'car') return buildCar(color);
+  if (node.kind === 'bus') return buildBus(color);
+  if (node.kind === 'forklift') return buildForklift(color);
+  if (node.kind === 'trafficLight') return buildTrafficLight(color);
+  if (node.kind === 'parkingGate') return buildParkingGate(color);
+  if (node.kind === 'streetLight') return buildStreetLight(color);
+  if (node.kind === 'fence') return buildFence(color);
+  if (node.kind === 'securityBooth') return buildSecurityBooth(color);
+  if (node.kind === 'fireHydrant') return buildFireHydrant(color);
+  if (node.kind === 'chargingPile') return buildChargingPile(color);
+  if (node.kind === 'pump') return buildPump(color);
+  if (node.kind === 'valve') return buildValve(color);
+  if (node.kind === 'transformer') return buildTransformer(color);
+  if (node.kind === 'electricalCabinet') return buildElectricalCabinet(color);
   if (node.kind === 'sensor') return buildSensor(color);
   if (node.kind === 'light') {
     const light = new THREE.PointLight(color, 3, 16);
@@ -106,6 +173,7 @@ export function buildObject(node: SceneNode): THREE.Object3D {
   if (node.kind === 'text' || node.kind === 'label' || node.kind === 'popup')
     return group(
       box([2.4, 0.6, 0.06], node.kind === 'popup' ? '#1d4ed8' : '#0f766e', [0, 1.4, 0], true),
+      textSprite(node.text ?? node.name),
     );
   if (node.kind === 'model')
     return group(mesh(new THREE.IcosahedronGeometry(0.95, 1), color, [0, 1, 0], true));
@@ -297,6 +365,192 @@ function buildTruck(color: string) {
     }
   return root;
 }
+
+function vehicleWheel(position: [number, number, number], radius = 0.36) {
+  const wheel = cylinder(radius, radius, 0.22, '#17202a', position);
+  wheel.rotation.x = Math.PI / 2;
+  return wheel;
+}
+
+function buildCar(color: string) {
+  const root = group(
+    box([3.4, 0.55, 1.55], color, [0, 0.65, 0], true),
+    box([1.75, 0.7, 1.38], color, [-0.2, 1.2, 0], true),
+    box([1.25, 0.5, 1.42], '#7ec8df', [-0.2, 1.25, 0]),
+    box([0.7, 0.12, 1.58], '#f8fafc', [1.42, 0.78, 0]),
+  );
+  for (const x of [-1.05, 1.05])
+    for (const z of [-0.82, 0.82]) root.add(vehicleWheel([x, 0.42, z]));
+  return root;
+}
+
+function buildBus(color: string) {
+  const root = group(
+    box([5.8, 1.85, 1.9], color, [0, 1.25, 0], true),
+    box([5.45, 0.72, 1.94], '#70b8d2', [0, 1.68, 0]),
+    box([0.75, 1.5, 0.08], '#17364b', [2.35, 1.05, 0.97]),
+    box([5.9, 0.14, 2], '#e2e8f0', [0, 2.24, 0]),
+  );
+  for (const x of [-1.9, 1.9])
+    for (const z of [-1.02, 1.02]) root.add(vehicleWheel([x, 0.42, z], 0.43));
+  return root;
+}
+
+function buildForklift(color: string) {
+  const root = group(
+    box([2.3, 0.7, 1.35], color, [-0.45, 0.7, 0], true),
+    box([0.85, 1.2, 1.2], color, [-0.8, 1.45, 0], true),
+    box([0.12, 2.5, 0.12], '#334155', [0.85, 1.45, -0.52]),
+    box([0.12, 2.5, 0.12], '#334155', [0.85, 1.45, 0.52]),
+    box([2.1, 0.1, 0.16], '#64748b', [1.82, 0.18, -0.38]),
+    box([2.1, 0.1, 0.16], '#64748b', [1.82, 0.18, 0.38]),
+  );
+  for (const x of [-0.95, 0.62])
+    for (const z of [-0.72, 0.72]) root.add(vehicleWheel([x, 0.4, z], x < 0 ? 0.42 : 0.31));
+  return root;
+}
+
+function buildTrafficLight(color: string) {
+  const root = group(
+    cylinder(0.1, 0.16, 3.8, color, [0, 1.9, 0], true),
+    cylinder(0.42, 0.52, 0.16, '#475569', [0, 0.08, 0]),
+    box([0.72, 1.85, 0.48], color, [0, 3.45, 0], true),
+  );
+  ['#ef4444', '#facc15', '#22c55e'].forEach((signalColor, index) =>
+    root.add(
+      mesh(new THREE.SphereGeometry(0.2, 16, 10), signalColor, [0, 3.95 - index * 0.52, 0.28]),
+    ),
+  );
+  return root;
+}
+
+function buildParkingGate(color: string) {
+  const root = group(
+    box([0.7, 1.5, 0.72], color, [-2.05, 0.75, 0], true),
+    box([4.5, 0.16, 0.18], '#f8fafc', [0.52, 1.38, 0]),
+    cylinder(0.16, 0.16, 0.3, '#334155', [-1.72, 1.38, 0]),
+  );
+  for (const x of [-1, 0, 1, 2]) root.add(box([0.36, 0.18, 0.2], '#ef4444', [x, 1.38, 0]));
+  return root;
+}
+
+function buildStreetLight(color: string) {
+  return group(
+    cylinder(0.1, 0.17, 4.8, color, [0, 2.4, 0], true),
+    cylinder(0.38, 0.5, 0.14, '#475569', [0, 0.07, 0]),
+    box([1.5, 0.1, 0.12], color, [0.7, 4.75, 0], true),
+    box([0.62, 0.16, 0.42], '#fde68a', [1.4, 4.64, 0]),
+  );
+}
+
+function buildFence(color: string) {
+  const root = group(
+    box([6, 0.11, 0.12], color, [0, 0.55, 0], true),
+    box([6, 0.11, 0.12], color, [0, 1.45, 0], true),
+  );
+  for (let x = -3; x <= 3; x += 0.6) root.add(box([0.09, 1.7, 0.1], color, [x, 0.85, 0], true));
+  root.add(box([6.2, 0.12, 0.55], '#475569', [0, 0.06, 0]));
+  return root;
+}
+
+function buildSecurityBooth(color: string) {
+  return group(
+    box([2.35, 2.35, 2], color, [0, 1.2, 0], true),
+    box([2.7, 0.18, 2.35], '#334155', [0, 2.48, 0]),
+    box([1.2, 0.9, 0.07], '#7dd3fc', [-0.45, 1.55, 1.03]),
+    box([0.65, 1.8, 0.08], '#1e293b', [0.72, 0.9, 1.04]),
+    box([2.5, 0.16, 2.15], '#64748b', [0, 0.08, 0]),
+  );
+}
+
+function buildFireHydrant(color: string) {
+  const root = group(
+    cylinder(0.32, 0.42, 1.25, color, [0, 0.68, 0], true),
+    cylinder(0.38, 0.38, 0.12, '#fca5a5', [0, 1.35, 0]),
+    mesh(new THREE.SphereGeometry(0.32, 16, 10), color, [0, 1.48, 0], true),
+    cylinder(0.52, 0.58, 0.16, '#475569', [0, 0.08, 0]),
+  );
+  for (const x of [-0.42, 0.42]) {
+    const nozzle = cylinder(0.16, 0.22, 0.32, '#fca5a5', [x, 0.9, 0]);
+    nozzle.rotation.z = Math.PI / 2;
+    root.add(nozzle);
+  }
+  return root;
+}
+
+function buildChargingPile(color: string) {
+  const root = group(
+    box([1, 1.7, 0.58], color, [0, 0.92, 0], true),
+    box([0.66, 0.42, 0.05], '#0f172a', [0, 1.3, 0.315]),
+    box([0.2, 0.28, 0.08], '#22c55e', [0, 0.72, 0.34]),
+    box([1.25, 0.12, 0.82], '#475569', [0, 0.06, 0]),
+  );
+  const cable = mesh(
+    new THREE.TorusGeometry(0.42, 0.045, 8, 24, Math.PI * 1.45),
+    '#17202a',
+    [0.58, 0.72, 0],
+  );
+  cable.rotation.y = Math.PI / 2;
+  root.add(cable);
+  return root;
+}
+
+function buildPump(color: string) {
+  const motor = cylinder(0.62, 0.62, 1.75, color, [-0.65, 0.82, 0], true);
+  motor.rotation.z = Math.PI / 2;
+  const root = group(
+    box([3.5, 0.18, 1.45], '#475569', [0, 0.09, 0]),
+    motor,
+    cylinder(0.68, 0.82, 1.05, color, [0.85, 0.72, 0], true),
+    cylinder(0.25, 0.25, 1.15, '#94a3b8', [0.85, 1.72, 0]),
+  );
+  root.add(mesh(new THREE.TorusGeometry(0.72, 0.08, 10, 28), '#cbd5e1', [0.85, 0.76, 0.56]));
+  return root;
+}
+
+function buildValve(color: string) {
+  const pipe = cylinder(0.28, 0.28, 3.5, '#64748b', [0, 0.55, 0]);
+  pipe.rotation.z = Math.PI / 2;
+  const wheel = mesh(new THREE.TorusGeometry(0.68, 0.08, 10, 28), color, [0, 1.7, 0], true);
+  return group(
+    pipe,
+    cylinder(0.65, 0.65, 0.72, color, [0, 0.55, 0], true),
+    cylinder(0.09, 0.09, 0.95, '#94a3b8', [0, 1.15, 0]),
+    wheel,
+    box([1.15, 0.08, 0.08], color, [0, 1.7, 0], true),
+  );
+}
+
+function buildTransformer(color: string) {
+  const root = group(
+    box([3.6, 2.35, 2.55], color, [0, 1.25, 0], true),
+    box([3.9, 0.16, 2.8], '#334155', [0, 2.52, 0]),
+    box([3.9, 0.14, 2.8], '#475569', [0, 0.07, 0]),
+    box([0.9, 1.35, 0.06], '#1e293b', [1.05, 1.12, 1.3]),
+    box([0.9, 1.35, 0.06], '#1e293b', [-1.05, 1.12, 1.3]),
+  );
+  for (const x of [-1.2, 0, 1.2]) root.add(cylinder(0.12, 0.18, 0.65, '#92400e', [x, 2.88, 0]));
+  for (const x of [-1.45, -1.15, -0.85, 0.85, 1.15, 1.45])
+    root.add(box([0.08, 1.65, 2.7], '#94a3b8', [x, 1.25, 0]));
+  return root;
+}
+
+function buildElectricalCabinet(color: string) {
+  const root = group(
+    box([1.8, 2.5, 0.9], color, [0, 1.3, 0], true),
+    box([1.55, 2.18, 0.06], '#334155', [0, 1.32, 0.48]),
+    box([0.72, 0.38, 0.05], '#0f172a', [0, 1.85, 0.52]),
+    box([0.08, 0.36, 0.08], '#cbd5e1', [0.62, 1.2, 0.54]),
+    box([2.05, 0.14, 1.12], '#475569', [0, 0.07, 0]),
+  );
+  ['#22c55e', '#facc15', '#ef4444'].forEach((indicator, index) =>
+    root.add(
+      mesh(new THREE.SphereGeometry(0.07, 10, 8), indicator, [-0.24 + index * 0.24, 1.46, 0.54]),
+    ),
+  );
+  return root;
+}
+
 function buildSensor(color: string) {
   const root = group(
     cylinder(0.08, 0.12, 2.4, '#647784', [0, 1.2, 0]),

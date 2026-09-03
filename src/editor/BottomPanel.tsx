@@ -1,44 +1,28 @@
 import { useEffect, useState } from 'react';
-import { History, Pause, Play, Plus, Sparkles, Trash2, Zap } from 'lucide-react';
-import { formatTimelineTime, MAX_TIMELINE_DURATION_SECONDS } from '../timeline';
+import { History, Pause, Play, Plus, Trash2, Zap } from 'lucide-react';
+import {
+  TIMELINE_SPEEDS,
+  formatTimelineTime,
+  MAX_TIMELINE_DURATION_SECONDS,
+} from '../timeline';
 import type {
+  SceneDataSource,
   SceneEventAction,
-  SceneEventActionType,
   SceneEventRule,
   SceneEventScope,
-  SceneEventTriggerType,
   SceneNode,
   SceneTimeline,
   SceneTimelineProperty,
 } from '../types';
+import { timelinePropertyLabels } from './eventConfig';
+import { EventRuleList } from './EventRuleList';
 import {
-  actionLabels,
-  nodeTriggerLabels,
-  sceneTriggerLabels,
-  timelinePropertyLabels,
-} from './eventConfig';
-
-type TimelineDurationUnit = 'seconds' | 'minutes' | 'hours';
-
-const durationUnits: Record<
-  TimelineDurationUnit,
-  { label: string; factor: number; precision: number }
-> = {
-  seconds: { label: '秒', factor: 1, precision: 2 },
-  minutes: { label: '分', factor: 60, precision: 4 },
-  hours: { label: '时', factor: 3600, precision: 6 },
-};
-
-function preferredDurationUnit(seconds: number): TimelineDurationUnit {
-  if (seconds >= 3600) return 'hours';
-  if (seconds >= 60) return 'minutes';
-  return 'seconds';
-}
-
-function formatDurationInput(seconds: number, unit: TimelineDurationUnit) {
-  const config = durationUnits[unit];
-  return String(Number((seconds / config.factor).toFixed(config.precision)));
-}
+  durationUnits,
+  formatDurationInput,
+  parseDurationInput,
+  preferredDurationUnit,
+  type TimelineDurationUnit,
+} from '../lib/timelineDuration';
 
 export function BottomPanel({
   tab,
@@ -50,7 +34,11 @@ export function BottomPanel({
   onAddEvent,
   onPatchRule,
   onPatchAction,
+  onAddAction,
+  onMoveAction,
+  onDeleteAction,
   onDeleteEvent,
+  sources,
   timeline,
   timelineTime,
   timelinePlaying,
@@ -69,13 +57,19 @@ export function BottomPanel({
   onAddEvent: () => void;
   onPatchRule: (id: string, patch: Partial<SceneEventRule>) => void;
   onPatchAction: (ruleId: string, actionId: string, patch: Partial<SceneEventAction>) => void;
+  onAddAction: (ruleId: string) => void;
+  onMoveAction: (ruleId: string, actionId: string, direction: -1 | 1) => void;
+  onDeleteAction: (ruleId: string, actionId: string) => void;
   onDeleteEvent: (id: string) => void;
+  sources: SceneDataSource[];
   timeline: SceneTimeline;
   timelineTime: number;
   timelinePlaying: boolean;
   onTimelineTimeChange: (time: number) => void;
   onTimelinePlayingChange: (playing: boolean) => void;
-  onPatchTimeline: (patch: Partial<Pick<SceneTimeline, 'duration' | 'loop'>>) => void;
+  onPatchTimeline: (
+    patch: Partial<Pick<SceneTimeline, 'duration' | 'loop' | 'speed'>>,
+  ) => void;
   onAddKeyframe: (property: SceneTimelineProperty) => void;
   onDeleteKeyframe: (id: string) => void;
 }) {
@@ -97,15 +91,15 @@ export function BottomPanel({
 
   const commitDuration = () => {
     if (!durationDirty) return;
-    const value = Number(durationInput.replace(',', '.'));
-    if (!Number.isFinite(value) || value <= 0) {
+    const parsed = parseDurationInput(durationInput, durationUnit);
+    if (parsed === null) {
       setDurationInput(formatDurationInput(timeline.duration, durationUnit));
       setDurationDirty(false);
       return;
     }
     const duration = Math.min(
       MAX_TIMELINE_DURATION_SECONDS,
-      Math.max(1, Math.round(value * durationUnits[durationUnit].factor * 1000) / 1000),
+      Math.max(1, Math.round(parsed * 1000) / 1000),
     );
     setDurationInput(formatDurationInput(duration, durationUnit));
     setDurationDirty(false);
@@ -125,11 +119,19 @@ export function BottomPanel({
             场景事件
           </button>
         </div>
-        <span className="muted-text">
-          {tab === 'events'
-            ? `场景事件规则 ${events.length} 条`
-            : `关键帧 ${timeline.keyframes.length} 个 · ${formatDurationInput(timeline.duration, durationUnit)} ${durationUnits[durationUnit].label}`}
-        </span>
+        {tab === 'events' ? (
+          <div className="bottom-head-actions">
+            <span className="muted-text">{events.length} 条</span>
+            <button className="add-event head-add-event" onClick={onAddEvent}>
+              <Zap size={13} />
+              添加场景事件
+            </button>
+          </div>
+        ) : (
+          <span className="muted-text">
+            {`关键帧 ${timeline.keyframes.length} 个 · ${formatDurationInput(timeline.duration, durationUnit)} ${durationUnits[durationUnit].label}`}
+          </span>
+        )}
       </div>
       {tab === 'timeline' ? (
         <div className="timeline">
@@ -174,6 +176,8 @@ export function BottomPanel({
               ))}
             </div>
             <span>{formatTimelineTime(timeline.duration)}</span>
+          </div>
+          <div className="timeline-controls timeline-controls-sub">
             <label className="timeline-duration">
               <span>时长</span>
               <span className="timeline-duration-control">
@@ -208,6 +212,20 @@ export function BottomPanel({
                   ))}
                 </select>
               </span>
+            </label>
+            <label className="timeline-speed">
+              <span>速度</span>
+              <select
+                aria-label="时间轴播放速度"
+                value={timeline.speed ?? 1}
+                onChange={(event) => onPatchTimeline({ speed: Number(event.target.value) })}
+              >
+                {TIMELINE_SPEEDS.map((speed) => (
+                  <option key={speed} value={speed}>
+                    {speed}x
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="timeline-loop">
               <input
@@ -275,172 +293,20 @@ export function BottomPanel({
           </div>
         </div>
       ) : (
-        <div className="event-list">
-          <div className="event-toolbar">
-            <span>场景级规则在预览中按场景加载或全局触发条件执行</span>
-            <button className="add-event" onClick={onAddEvent}>
-              <Zap size={14} />
-              添加场景事件
-            </button>
-          </div>
-          {events.length ? (
-            <div className="event-rule-list">
-              {events.map((rule) => {
-                const action = rule.actions[0] ?? {
-                  id: `action-${rule.id}`,
-                  type: 'showPopup' as SceneEventActionType,
-                  targetId: rule.trigger.nodeId,
-                };
-                return (
-                  <div className="event-rule-card" key={rule.id}>
-                    <div className="event-rule-head">
-                      <label className="event-enable">
-                        <input
-                          type="checkbox"
-                          checked={rule.enabled}
-                          onChange={(event) =>
-                            onPatchRule(rule.id, { enabled: event.target.checked })
-                          }
-                        />
-                        启用
-                      </label>
-                      <input
-                        aria-label="事件名称"
-                        value={rule.name}
-                        onChange={(event) => onPatchRule(rule.id, { name: event.target.value })}
-                      />
-                      <button className="icon-button" onClick={() => onDeleteEvent(rule.id)}>
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                    <div className="event-form-grid">
-                      <label>
-                        触发方式
-                        <select
-                          value={rule.trigger.type}
-                          onChange={(event) =>
-                            onPatchRule(rule.id, {
-                              trigger: {
-                                ...rule.trigger,
-                                type: event.target.value as SceneEventTriggerType,
-                              },
-                            })
-                          }
-                        >
-                          {Object.entries(
-                            scope === 'scene' ? sceneTriggerLabels : nodeTriggerLabels,
-                          ).map(([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        触发对象
-                        <select
-                          value={rule.trigger.nodeId ?? ''}
-                          disabled={rule.trigger.type === 'sceneLoad'}
-                          onChange={(event) =>
-                            onPatchRule(rule.id, {
-                              trigger: { ...rule.trigger, nodeId: event.target.value || null },
-                            })
-                          }
-                        >
-                          <option value="">全场景</option>
-                          {nodes.map((node) => (
-                            <option key={node.id} value={node.id}>
-                              {node.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        执行动作
-                        <select
-                          value={action.type}
-                          onChange={(event) =>
-                            onPatchAction(rule.id, action.id, {
-                              type: event.target.value as SceneEventActionType,
-                            })
-                          }
-                        >
-                          {Object.entries(actionLabels).map(([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        动作对象
-                        <select
-                          value={action.targetId ?? ''}
-                          onChange={(event) =>
-                            onPatchAction(rule.id, action.id, {
-                              targetId: event.target.value || null,
-                            })
-                          }
-                        >
-                          <option value="">同触发对象</option>
-                          {nodes.map((node) => (
-                            <option key={node.id} value={node.id}>
-                              {node.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      {action.type === 'showPopup' && (
-                        <label className="event-form-wide">
-                          弹窗内容
-                          <input
-                            value={action.message ?? ''}
-                            onChange={(event) =>
-                              onPatchAction(rule.id, action.id, { message: event.target.value })
-                            }
-                          />
-                        </label>
-                      )}
-                      {action.type === 'setColor' && (
-                        <label>
-                          目标颜色
-                          <input
-                            type="color"
-                            value={action.color ?? '#ff6b6b'}
-                            onChange={(event) =>
-                              onPatchAction(rule.id, action.id, { color: event.target.value })
-                            }
-                          />
-                        </label>
-                      )}
-                      {action.type === 'setVisibility' && (
-                        <label>
-                          可见状态
-                          <select
-                            value={String(action.visible ?? true)}
-                            onChange={(event) =>
-                              onPatchAction(rule.id, action.id, {
-                                visible: event.target.value === 'true',
-                              })
-                            }
-                          >
-                            <option value="true">显示</option>
-                            <option value="false">隐藏</option>
-                          </select>
-                        </label>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="timeline-empty">
-              <Sparkles size={18} />
-              点击“添加场景事件”配置场景加载后的相机定位或全局动作
-            </div>
-          )}
-        </div>
+        <EventRuleList
+          scope="scene"
+          nodes={nodes}
+          sources={sources}
+          selectedId={selectedId}
+          events={events}
+          onAddEvent={onAddEvent}
+          onPatchRule={onPatchRule}
+          onPatchAction={onPatchAction}
+          onAddAction={onAddAction}
+          onMoveAction={onMoveAction}
+          onDeleteAction={onDeleteAction}
+          onDeleteEvent={onDeleteEvent}
+        />
       )}
     </div>
   );

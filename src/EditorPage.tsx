@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   ChevronDown,
   ChevronLeft,
@@ -6,8 +14,12 @@ import {
   Download,
   Eye,
   EyeOff,
+  Folder,
+  FolderPlus,
   Grid3X3,
   History,
+  Axis3d,
+  Globe,
   MousePointer2,
   Package,
   Pause,
@@ -19,12 +31,17 @@ import {
   Settings2,
   Sparkles,
   Square,
+  Trash2,
   Undo2,
   Upload,
   X,
   Zap,
 } from 'lucide-react';
-import SceneCanvas, { type CameraFocusRequest } from './SceneCanvas';
+import SceneCanvas, {
+  type CameraFocusRequest,
+  type CoordinateSpace,
+  type ViewPreset,
+} from './SceneCanvas';
 import { demoSceneFor, upgradeDemoScene } from './demos';
 import {
   componentCatalog,
@@ -55,9 +72,13 @@ import {
   listReleases,
   loadDraft,
   reportRuntimeError,
+  listRuntimeErrors,
+  deleteRuntimeError,
+  clearRuntimeErrors,
   saveDraft,
   listAssets,
   uploadAsset,
+  deleteAsset,
   testDataSource,
 } from './api';
 import { BottomPanel } from './editor/BottomPanel';
@@ -65,6 +86,8 @@ import { CategoryScroller, Tree } from './editor/EditorSidebar';
 import { EventRuleList } from './editor/EventRuleList';
 import { DataSourcePanel, Inspector } from './editor/InspectorPanels';
 import { ReleaseDrawer } from './editor/ReleaseDrawer';
+import { PublishDialog } from './editor/PublishDialog';
+import { validateSceneForPublish, type PublishIssue } from './publishCheck';
 import { RuntimeView } from './editor/RuntimeView';
 import { getEventOwnerId, getEventScope, timelinePropertyLabels } from './editor/eventConfig';
 import {
@@ -74,6 +97,7 @@ import {
   normalizeTimeline,
   propertyValue,
 } from './timeline';
+import { applySubtreeToggle, normalizeSingleSelection } from './lib/sceneTree';
 
 type Props = { project: ProjectMeta; onExit: () => void };
 
@@ -121,11 +145,18 @@ export default function EditorPage({ project, onExit }: Props) {
   const [timelinePlaying, setTimelinePlaying] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<'properties' | 'data' | 'events'>('properties');
   const [showReleases, setShowReleases] = useState(false);
+  const [publishIssues, setPublishIssues] = useState<PublishIssue[] | null>(null);
   const [releases, setReleases] = useState<Release[]>([]);
   const [runtimeErrors, setRuntimeErrors] = useState<RuntimeError[]>([]);
   const [isRuntime, setIsRuntime] = useState(false);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [gridVisible, setGridVisible] = useState(true);
+  const [axesVisible, setAxesVisible] = useState(true);
+  const [viewPreset, setViewPreset] = useState<ViewPreset>('perspective');
+  const [coordinateSpace, setCoordinateSpace] = useState<CoordinateSpace>('world');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [focusRequest, setFocusRequest] = useState<CameraFocusRequest | null>(null);
+  const [rightPanelWidth, setRightPanelWidth] = useState(340);
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -140,6 +171,7 @@ export default function EditorPage({ project, onExit }: Props) {
   // 避免 StrictMode 双调用 setState updater 时把撤销快照重复入栈。
   const sceneRef = useRef(initialScene);
   const selectedIdRef = useRef(selectedId);
+  const selectedIdsRef = useRef<string[]>([]);
   const copiedNodeRef = useRef<SceneNode | null>(null);
   const canvasPointerRef = useRef<[number, number, number] | null>(null);
   const transformStartRef = useRef<SceneDocument | null>(null);
@@ -181,7 +213,7 @@ export default function EditorPage({ project, onExit }: Props) {
     let frame = 0;
     let previous = performance.now();
     const tick = (now: number) => {
-      const delta = (now - previous) / 1000;
+      const delta = Math.min(0.1, (now - previous) / 1000) * (timeline.speed ?? 1);
       previous = now;
       setTimelineTime((current) => {
         const next = current + delta;
@@ -194,7 +226,13 @@ export default function EditorPage({ project, onExit }: Props) {
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [timeline.duration, timeline.keyframes.length, timeline.loop, timelinePlaying]);
+  }, [
+    timeline.duration,
+    timeline.keyframes.length,
+    timeline.loop,
+    timeline.speed,
+    timelinePlaying,
+  ]);
 
   useEffect(() => {
     setTimelineTime((current) => Math.min(current, timeline.duration));
@@ -299,6 +337,184 @@ export default function EditorPage({ project, onExit }: Props) {
     [updateScene],
   );
 
+  /** 画布/场景树选择：单击单选（已取消 Ctrl 加选）。 */
+  const handleSelect = useCallback((id: string | null) => {
+    const selection = normalizeSingleSelection(id);
+    setSelectedId(selection.selectedId);
+    setSelectedIds(selection.selectedIds);
+  }, []);
+
+  /** Shift 拖拽框选：非加选时替换选择集，加选时合并。 */
+  const handleBoxSelect = useCallback((ids: string[], additive: boolean) => {
+    if (!ids.length) {
+      if (!additive) {
+        setSelectedId(null);
+        setSelectedIds([]);
+      }
+      return;
+    }
+    setSelectedIds((prev) => {
+      const merged = additive ? Array.from(new Set([...prev, ...ids])) : ids;
+      setSelectedId(merged[0] ?? null);
+      return merged;
+    });
+  }, []);
+
+  /** 场景树拖拽改父：禁止拖入自身子树。 */
+  const reparentNode = useCallback(
+    (id: string, newParentId: string | null) => {
+      if (id === newParentId) return;
+      if (newParentId) {
+        const descendants = new Set<string>([id]);
+        let changed = true;
+        while (changed) {
+          changed = false;
+          sceneRef.current.nodes.forEach((node) => {
+            if (node.parentId && descendants.has(node.parentId) && !descendants.has(node.id)) {
+              descendants.add(node.id);
+              changed = true;
+            }
+          });
+        }
+        if (descendants.has(newParentId)) {
+          showToast('不能把对象移动到它自己的子级中');
+          return;
+        }
+      }
+      updateScene((current) => ({
+        ...current,
+        nodes: current.nodes.map((node) =>
+          node.id === id ? { ...node, parentId: newParentId } : node,
+        ),
+      }));
+      if (newParentId)
+        setCollapsedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(newParentId);
+          return next;
+        });
+    },
+    [showToast, updateScene],
+  );
+
+  const renameNode = useCallback(
+    (id: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      patchNodes(id, { name: trimmed.slice(0, 64) });
+    },
+    [patchNodes],
+  );
+
+  const focusNode = useCallback((id: string) => {
+    setFocusRequest({ nodeId: id, nonce: Date.now() });
+  }, []);
+
+  /** 拖拽右面板左边缘调整属性面板宽度（280–640px）。 */
+  const startResizeRight = useCallback(
+    (event: React.PointerEvent) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = rightPanelWidth;
+      const onMove = (move: PointerEvent) => {
+        const next = Math.min(640, Math.max(280, startWidth + (startX - move.clientX)));
+        setRightPanelWidth(next);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+    [rightPanelWidth],
+  );
+
+  /** 收集选中节点的整棵子树（含后代）。 */
+  const collectSubtree = (nodes: SceneNode[], roots: string[]) => {
+    const removed = new Set(roots);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      nodes.forEach((node) => {
+        if (node.parentId && removed.has(node.parentId) && !removed.has(node.id)) {
+          removed.add(node.id);
+          changed = true;
+        }
+      });
+    }
+    return removed;
+  };
+
+  /** 批量删除：锁定拦截、含子节点二次确认、级联清理事件引用。 */
+  const deleteNodes = useCallback(
+    (idsInput: string[]) => {
+      const ids = idsInput.filter(Boolean);
+      if (!ids.length) return;
+      const current = sceneRef.current;
+      const lockedNode = ids
+        .map((id) => current.nodes.find((node) => node.id === id))
+        .find((node) => node?.locked);
+      if (lockedNode) {
+        showToast(`「${lockedNode.name}」已锁定，请先解除锁定再删除`);
+        return;
+      }
+      const removed = collectSubtree(current.nodes, ids);
+      const childCount = removed.size - ids.length;
+      const directParent = ids.some((id) => current.nodes.some((node) => node.parentId === id));
+      if (childCount > 0 || directParent) {
+        const ok = window.confirm(
+          `选中对象包含 ${childCount} 个子节点，删除后将一并移除（可用撤销恢复）。是否继续？`,
+        );
+        if (!ok) return;
+      }
+      updateScene((next) => ({
+        ...next,
+        nodes: next.nodes.filter((node) => !removed.has(node.id)),
+        events: (next.events ?? [])
+          .map((rule) => ({
+            ...rule,
+            ownerNodeId:
+              getEventScope(rule) === 'node' &&
+              rule.ownerNodeId &&
+              removed.has(rule.ownerNodeId)
+                ? null
+                : rule.ownerNodeId,
+            trigger: {
+              ...rule.trigger,
+              nodeId:
+                rule.trigger.nodeId && removed.has(rule.trigger.nodeId)
+                  ? null
+                  : rule.trigger.nodeId,
+            },
+            actions: rule.actions.filter(
+              (action) => !action.targetId || !removed.has(action.targetId),
+            ),
+          }))
+          .filter(
+            (rule) =>
+              rule.actions.length > 0 &&
+              (getEventScope(rule) === 'scene' || getEventOwnerId(rule) !== null),
+          ),
+      }));
+      setSelectedId(null);
+      setSelectedIds([]);
+    },
+    [showToast, updateScene],
+  );
+
+  /** 新建一个空分组，随后可把其它节点拖入分组。 */
+  const addGroup = useCallback(() => {
+    const group = createNode('group', sceneRef.current.nodes.length, null);
+    group.name = '分组';
+    updateScene((current) => ({
+      ...current,
+      nodes: [...current.nodes, group],
+    }));
+    setSelectedId(group.id);
+    setSelectedIds([group.id]);
+  }, [updateScene]);
+
   const addNode = useCallback(
     (kind: NodeKind, position?: [number, number, number]) => {
       const node = createNode(kind, sceneRef.current.nodes.length, null, position);
@@ -307,6 +523,7 @@ export default function EditorPage({ project, onExit }: Props) {
         nodes: [...current.nodes, node],
       }));
       setSelectedId(node.id);
+      setSelectedIds([node.id]);
     },
     [updateScene],
   );
@@ -417,8 +634,65 @@ export default function EditorPage({ project, onExit }: Props) {
     [updateScene],
   );
 
+  const addEventAction = useCallback(
+    (ruleId: string) => {
+      updateScene((current) => ({
+        ...current,
+        events: (current.events ?? []).map((rule) =>
+          rule.id === ruleId
+            ? {
+                ...rule,
+                actions: [
+                  ...rule.actions,
+                  {
+                    id: `action-${uid()}`,
+                    type: 'setColor' as SceneEventAction['type'],
+                    targetId: rule.trigger.nodeId ?? rule.ownerNodeId,
+                    color: '#ff6b6b',
+                  },
+                ],
+              }
+            : rule,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
+  const moveEventAction = useCallback(
+    (ruleId: string, actionId: string, direction: -1 | 1) => {
+      updateScene((current) => ({
+        ...current,
+        events: (current.events ?? []).map((rule) => {
+          if (rule.id !== ruleId) return rule;
+          const index = rule.actions.findIndex((action) => action.id === actionId);
+          const target = index + direction;
+          if (index < 0 || target < 0 || target >= rule.actions.length) return rule;
+          const actions = [...rule.actions];
+          [actions[index], actions[target]] = [actions[target], actions[index]];
+          return { ...rule, actions };
+        }),
+      }));
+    },
+    [updateScene],
+  );
+
+  const deleteEventAction = useCallback(
+    (ruleId: string, actionId: string) => {
+      updateScene((current) => ({
+        ...current,
+        events: (current.events ?? []).map((rule) =>
+          rule.id === ruleId
+            ? { ...rule, actions: rule.actions.filter((action) => action.id !== actionId) }
+            : rule,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
   const patchTimeline = useCallback(
-    (patch: Partial<Pick<SceneTimeline, 'duration' | 'loop'>>) => {
+    (patch: Partial<Pick<SceneTimeline, 'duration' | 'loop' | 'speed'>>) => {
       updateScene((current) => ({
         ...current,
         timeline: normalizeTimeline({
@@ -488,50 +762,13 @@ export default function EditorPage({ project, onExit }: Props) {
   );
 
   const deleteSelected = useCallback(() => {
-    const target = sceneRef.current.nodes.find((node) => node.id === selectedIdRef.current);
-    if (!target) return;
-    if (target.locked) {
-      showToast(`「${target.name}」已锁定，请先解除锁定再删除`);
-      return;
-    }
-    const removed = new Set([target.id]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      sceneRef.current.nodes.forEach((node) => {
-        if (node.parentId && removed.has(node.parentId) && !removed.has(node.id)) {
-          removed.add(node.id);
-          changed = true;
-        }
-      });
-    }
-    updateScene((current) => ({
-      ...current,
-      nodes: current.nodes.filter((node) => !removed.has(node.id)),
-      events: (current.events ?? [])
-        .map((rule) => ({
-          ...rule,
-          ownerNodeId:
-            getEventScope(rule) === 'node' && rule.ownerNodeId && removed.has(rule.ownerNodeId)
-              ? null
-              : rule.ownerNodeId,
-          trigger: {
-            ...rule.trigger,
-            nodeId:
-              rule.trigger.nodeId && removed.has(rule.trigger.nodeId) ? null : rule.trigger.nodeId,
-          },
-          actions: rule.actions.filter(
-            (action) => !action.targetId || !removed.has(action.targetId),
-          ),
-        }))
-        .filter(
-          (rule) =>
-            rule.actions.length > 0 &&
-            (getEventScope(rule) === 'scene' || getEventOwnerId(rule) !== null),
-        ),
-    }));
-    setSelectedId(null);
-  }, [showToast, updateScene]);
+    const ids = selectedIdsRef.current.length
+      ? selectedIdsRef.current
+      : selectedIdRef.current
+        ? [selectedIdRef.current]
+        : [];
+    deleteNodes(ids);
+  }, [deleteNodes]);
 
   const copySelected = useCallback(() => {
     const source = sceneRef.current.nodes.find((node) => node.id === selectedIdRef.current);
@@ -574,6 +811,7 @@ export default function EditorPage({ project, onExit }: Props) {
       nodes: [...current.nodes, clone],
     }));
     setSelectedId(clone.id);
+    setSelectedIds([clone.id]);
     showToast(`已创建「${clone.name}」`);
   }, [showToast, updateScene]);
 
@@ -592,8 +830,13 @@ export default function EditorPage({ project, onExit }: Props) {
       name: `数据源 ${(sceneRef.current.dataSources?.length ?? 0) + 1}`,
       type: 'json',
       json: '{"value": 72}',
+      method: 'GET',
+      headers: {},
+      params: {},
       refreshInterval: 10,
       timeout: 10,
+      authType: 'none',
+      useProxy: true,
     };
     updateScene((current) => ({
       ...current,
@@ -669,6 +912,27 @@ export default function EditorPage({ project, onExit }: Props) {
     [updateScene],
   );
 
+  const updateDataBinding = useCallback(
+    (bindingId: string, patch: Partial<SceneDataBinding>) => {
+      const id = selectedIdRef.current;
+      if (!id) return;
+      updateScene((current) => ({
+        ...current,
+        nodes: current.nodes.map((node) =>
+          node.id === id
+            ? {
+                ...node,
+                dataBindings: node.dataBindings?.map((binding) =>
+                  binding.id === bindingId ? { ...binding, ...patch } : binding,
+                ),
+              }
+            : node,
+        ),
+      }));
+    },
+    [updateScene],
+  );
+
   const handleUpload = useCallback(
     async (file: File) => {
       try {
@@ -677,6 +941,23 @@ export default function EditorPage({ project, onExit }: Props) {
         showToast(`已上传资源：${asset.name}`);
       } catch (error) {
         showToast(error instanceof Error ? error.message : '资源上传失败');
+      }
+    },
+    [project.id, showToast],
+  );
+
+  const handleDeleteAsset = useCallback(
+    async (asset: AssetMeta) => {
+      if (sceneRef.current.nodes.some((node) => node.assetPath === asset.url)) {
+        showToast('该资源正在场景中使用，请先删除对应组件');
+        return;
+      }
+      try {
+        await deleteAsset(project.id, asset.id);
+        setAssets((current) => current.filter((item) => item.id !== asset.id));
+        showToast(`已删除资源：${asset.name}`);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '资源删除失败');
       }
     },
     [project.id, showToast],
@@ -694,42 +975,54 @@ export default function EditorPage({ project, onExit }: Props) {
       node.assetPath = asset.url;
       updateScene((current) => ({ ...current, nodes: [...current.nodes, node] }));
       setSelectedId(node.id);
+      setSelectedIds([node.id]);
       showToast(`已将${asset.kind === 'image' ? '图片' : '模型'}添加到场景`);
     },
     [showToast, updateScene],
   );
 
-  const dropAssetNode = useCallback(
-    (assetId: string, position: [number, number, number]) => {
-      const asset = assets.find((item) => item.id === assetId);
-      if (asset) addAssetNode(asset, position);
-    },
-    [addAssetNode, assets],
-  );
-
+  // 切换显隐：分组整体作用于自身与全部后代，普通节点只作用于自身。
   const toggleVisible = useCallback(
     (id: string) => {
-      const node = sceneRef.current.nodes.find((item) => item.id === id);
-      if (node) patchNodes(id, { visible: !node.visible });
+      const target = sceneRef.current.nodes.find((item) => item.id === id);
+      if (!target) return;
+      const nextVisible = !target.visible;
+      updateScene((current) => ({
+        ...current,
+        nodes: applySubtreeToggle(current.nodes, id, 'visible', nextVisible),
+      }));
     },
-    [patchNodes],
+    [updateScene],
   );
 
+  // 切换锁定：分组整体作用于自身与全部后代，普通节点只作用于自身。
   const toggleLocked = useCallback(
     (id: string) => {
-      const node = sceneRef.current.nodes.find((item) => item.id === id);
-      if (node) patchNodes(id, { locked: !node.locked });
+      const target = sceneRef.current.nodes.find((item) => item.id === id);
+      if (!target) return;
+      const nextLocked = !target.locked;
+      updateScene((current) => ({
+        ...current,
+        nodes: applySubtreeToggle(current.nodes, id, 'locked', nextLocked),
+      }));
     },
-    [patchNodes],
+    [updateScene],
   );
 
   /** 撤销/重做后尽量保持当前选择，避免每次都跳到第一个节点。 */
   const applyHistoryScene = useCallback(
     (next: SceneDocument) => {
       commitScene(next);
-      setSelectedId((id) =>
-        id && next.nodes.some((node) => node.id === id) ? id : (next.nodes[0]?.id ?? null),
-      );
+      const validIds = new Set(next.nodes.map((node) => node.id));
+      const primary =
+        selectedIdRef.current && validIds.has(selectedIdRef.current)
+          ? selectedIdRef.current
+          : (next.nodes[0]?.id ?? null);
+      setSelectedId(primary);
+      setSelectedIds((ids) => {
+        const kept = ids.filter((id) => validIds.has(id));
+        return kept.length ? kept : primary ? [primary] : [];
+      });
       setSaveState('未保存');
     },
     [commitScene],
@@ -784,29 +1077,70 @@ export default function EditorPage({ project, onExit }: Props) {
   );
 
   const logError = useCallback(
-    (message: string, type: string = 'webgl') => {
+    (message: string, type: string = 'webgl', source?: string) => {
       const error: RuntimeError = {
         id: uid(),
         type,
+        level: 'error',
         message,
+        version: releases[0]?.version ?? 'draft',
+        source,
+        browser: navigator.userAgent,
+        traceId: uid(),
         createdAt: new Date().toISOString(),
       };
-      setRuntimeErrors((current) => [error, ...current].slice(0, 20));
+      setRuntimeErrors((current) => [error, ...current].slice(0, 100));
       void reportRuntimeError(project.id, error);
     },
-    [project.id],
+    [project.id, releases],
   );
 
   const openReleases = useCallback(async () => {
     setShowReleases(true);
     setReleases(await listReleases(project.id));
+    const page = await listRuntimeErrors(project.id, { pageSize: 200 });
+    setRuntimeErrors((local) => {
+      const merged = new Map<string, RuntimeError>();
+      page.items.forEach((item) => merged.set(item.id, item));
+      local.forEach((item) => merged.set(item.id, item));
+      return [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    });
   }, [project.id]);
 
-  const handlePublish = async () => {
+  const handleDeleteError = useCallback(
+    async (errorId: string) => {
+      setRuntimeErrors((current) => current.filter((item) => item.id !== errorId));
+      try {
+        await deleteRuntimeError(project.id, errorId);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '删除失败');
+      }
+    },
+    [project.id, showToast],
+  );
+
+  const handleClearErrors = useCallback(async () => {
+    setRuntimeErrors([]);
+    try {
+      await clearRuntimeErrors(project.id);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '清空失败');
+    }
+  }, [project.id, showToast]);
+
+  /** 发布前八项校验，结果交给确认框；阻断性错误存在时确认按钮禁用。 */
+  const requestPublish = () => {
+    const issues = validateSceneForPublish(sceneRef.current, assets);
+    setPublishIssues(issues);
+  };
+
+  const handlePublish = async (notes?: string) => {
     await handleSave();
     const release = await createRelease(project.id, sceneRef.current);
-    setReleases((current) => [release, ...current]);
+    const released = notes ? { ...release, notes } : release;
+    setReleases((current) => [released, ...current]);
     setShowReleases(true);
+    setPublishIssues(null);
     setSaveState('已发布');
   };
 
@@ -820,15 +1154,26 @@ export default function EditorPage({ project, onExit }: Props) {
     await handleSave();
   };
 
-  const iconFor = (kind: NodeKind): ReactNode => (
-    <span className="tree-text-icon">
-      {componentCatalog.find((item) => item.kind === kind)?.icon ?? '◇'}
-    </span>
-  );
+  const iconFor = (kind: NodeKind): ReactNode => {
+    if (kind === 'group')
+      return (
+        <span className="tree-text-icon tree-group-icon">
+          <Folder size={13} />
+        </span>
+      );
+    return (
+      <span className="tree-text-icon">
+        {componentCatalog.find((item) => item.kind === kind)?.icon ?? '◇'}
+      </span>
+    );
+  };
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -859,6 +1204,11 @@ export default function EditorPage({ project, onExit }: Props) {
         pasteCopied();
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'g') {
+        event.preventDefault();
+        addGroup();
+        return;
+      }
       if (event.key.toLowerCase() === 'w') setTransformMode('translate');
       if (event.key.toLowerCase() === 'e') setTransformMode('rotate');
       if (event.key.toLowerCase() === 'r') setTransformMode('scale');
@@ -867,7 +1217,7 @@ export default function EditorPage({ project, onExit }: Props) {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [copySelected, deleteSelected, handleSave, pasteCopied, redo, undo]);
+  }, [addGroup, copySelected, deleteSelected, handleSave, pasteCopied, redo, undo]);
 
   if (isRuntime)
     return (
@@ -923,7 +1273,7 @@ export default function EditorPage({ project, onExit }: Props) {
           <button className="tool-button" onClick={() => void openReleases()}>
             <History size={15} /> 发布记录
           </button>
-          <button className="primary-button" onClick={() => void handlePublish()}>
+          <button className="primary-button" onClick={requestPublish}>
             <Zap size={15} /> 发布
           </button>
           <button className="avatar" title="当前用户">
@@ -933,6 +1283,9 @@ export default function EditorPage({ project, onExit }: Props) {
       </header>
       <main
         className={`editor-body${leftPanelCollapsed ? ' left-panel-collapsed' : ''}${rightPanelCollapsed ? ' right-panel-collapsed' : ''}`}
+        style={{
+          '--right-panel-width': `${rightPanelCollapsed ? 0 : rightPanelWidth}px`,
+        } as CSSProperties}
       >
         <aside className={`left-panel${leftPanelCollapsed ? ' collapsed' : ''}`}>
           <button
@@ -1027,26 +1380,33 @@ export default function EditorPage({ project, onExit }: Props) {
               {assets.length ? (
                 <div className="asset-list">
                   {assets.map((asset) => (
-                    <button
+                    <div
                       className="asset-card"
                       key={asset.id}
-                      draggable
-                      onDragStart={(event) => {
-                        event.dataTransfer.effectAllowed = 'copy';
-                        event.dataTransfer.setData('asset-id', asset.id);
-                      }}
-                      onClick={() => addAssetNode(asset)}
-                      title="点击添加，或拖到画布指定位置"
                     >
-                      <span className="asset-preview" aria-hidden="true">
-                        {asset.kind === 'image' ? <img src={asset.url} alt="" /> : <span>3D</span>}
-                      </span>
-                      <span className="asset-copy">
-                        <strong>{asset.name}</strong>
-                        <small>{formatBytes(asset.size)} · 点击或拖拽添加</small>
-                      </span>
-                      <Plus size={14} />
-                    </button>
+                      <button
+                        className="asset-add-button"
+                        onClick={() => addAssetNode(asset)}
+                        title="点击添加到场景"
+                      >
+                        <span className="asset-preview" aria-hidden="true">
+                          {asset.kind === 'image' ? <img src={asset.url} alt="" /> : <span>3D</span>}
+                        </span>
+                        <span className="asset-copy">
+                          <strong>{asset.name}</strong>
+                          <small>{formatBytes(asset.size)} · 点击添加</small>
+                        </span>
+                        <Plus size={14} />
+                      </button>
+                      <button
+                        className="asset-delete-button"
+                        onClick={() => void handleDeleteAsset(asset)}
+                        title="删除资源"
+                        aria-label={`删除资源 ${asset.name}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               ) : (
@@ -1060,16 +1420,37 @@ export default function EditorPage({ project, onExit }: Props) {
           )}
           <div className="panel-section-title">
             <span>场景树</span>
-            <span className="tree-count">{scene.nodes.length}</span>
+            <span className="tree-title-tools">
+              <span className="tree-count">{scene.nodes.length}</span>
+              <button
+                type="button"
+                className="add-group-button"
+                title="新建空分组，可把对象拖入分组统一管理"
+                onClick={addGroup}
+              >
+                <FolderPlus size={13} />
+                添加分组
+              </button>
+            </span>
           </div>
-          <div className="scene-tree">
+          <div
+            className="scene-tree"
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes('tree-node')) event.preventDefault();
+            }}
+            onDrop={(event) => {
+              const dragId = event.dataTransfer.getData('tree-node');
+              if (dragId) reparentNode(dragId, null);
+            }}
+          >
             <Tree
               nodes={scene.nodes}
               parentId={null}
               level={0}
               selectedId={selectedId}
+              selectedIds={selectedIds}
               collapsedIds={collapsedIds}
-              onSelect={setSelectedId}
+              onSelect={handleSelect}
               onToggleVisible={toggleVisible}
               onToggleLocked={toggleLocked}
               onToggleCollapsed={(id) =>
@@ -1079,6 +1460,9 @@ export default function EditorPage({ project, onExit }: Props) {
                   return next;
                 })
               }
+              onRename={renameNode}
+              onReparent={reparentNode}
+              onFocus={focusNode}
               iconFor={iconFor}
             />
           </div>
@@ -1113,15 +1497,52 @@ export default function EditorPage({ project, onExit }: Props) {
               <button
                 className={gridVisible ? 'active' : ''}
                 onClick={() => setGridVisible(!gridVisible)}
+                title="显示或隐藏网格"
               >
                 <Grid3X3 size={14} />
                 网格
               </button>
+              <button
+                className={axesVisible ? 'active' : ''}
+                onClick={() => setAxesVisible(!axesVisible)}
+                title="显示或隐藏世界坐标轴"
+              >
+                <Axis3d size={14} />
+                坐标轴
+              </button>
+              <button
+                className={coordinateSpace === 'local' ? 'active' : ''}
+                onClick={() =>
+                  setCoordinateSpace((space) => (space === 'world' ? 'local' : 'world'))
+                }
+                title="切换 Gizmo 的世界/局部坐标空间"
+              >
+                <Globe size={14} />
+                {coordinateSpace === 'world' ? '世界' : '局部'}
+              </button>
+              <select
+                className="view-select"
+                value={viewPreset}
+                onChange={(event) => setViewPreset(event.target.value as ViewPreset)}
+                title="切换透视或正交标准视图"
+                aria-label="视图预设"
+              >
+                <option value="perspective">透视视图</option>
+                <option value="front">正视图</option>
+                <option value="back">后视图</option>
+                <option value="left">左视图</option>
+                <option value="right">右视图</option>
+                <option value="top">顶视图</option>
+                <option value="bottom">底视图</option>
+              </select>
+              <button
+                onClick={() => setViewPreset('perspective')}
+                title="重置为默认透视视角"
+              >
+                重置视角
+              </button>
             </div>
             <div className="canvas-status">
-              <span className="status-live">
-                <span /> LIVE
-              </span>
               <span>节点 {scene.nodes.length}</span>
               <button
                 className="icon-button"
@@ -1154,21 +1575,26 @@ export default function EditorPage({ project, onExit }: Props) {
               nodes={canvasNodes}
               cameraView={cameraView}
               selectedId={selectedId}
+              multiSelectedIds={selectedIds}
               mode={transformMode}
               gridVisible={gridVisible}
-              onSelect={setSelectedId}
+              axesVisible={axesVisible}
+              viewPreset={viewPreset}
+              coordinateSpace={coordinateSpace}
+              focusRequest={focusRequest}
+              onSelect={handleSelect}
+              onBoxSelect={handleBoxSelect}
               onPointerWorldPosition={handleCanvasPointerPosition}
               onDropKind={addNode}
-              onDropAsset={dropAssetNode}
               onTransformStart={handleTransformStart}
               onTransform={handleTransform}
               onRuntimeError={logError}
             />
             <div className="canvas-help">
-              <span>拖拽组件到画布</span>
-              <span>左键选择/拖动 Gizmo</span>
-              <span>右键旋转视角</span>
-              <span>滚轮缩放</span>
+              <span>拖拽组件到画布（优先落在模型表面）</span>
+              <span>Shift 拖拽框选 · 单击选中对象</span>
+              <span>右键旋转视角 · 滚轮缩放</span>
+              <span>双击场景树节点可重命名</span>
             </div>
             <div className="axis-widget">
               <span className="axis-x">X</span>
@@ -1188,7 +1614,11 @@ export default function EditorPage({ project, onExit }: Props) {
               onAddEvent={addSceneEventRule}
               onPatchRule={patchEventRule}
               onPatchAction={patchEventAction}
+              onAddAction={addEventAction}
+              onMoveAction={moveEventAction}
+              onDeleteAction={deleteEventAction}
               onDeleteEvent={deleteEventRule}
+              sources={scene.dataSources ?? []}
               timeline={timeline}
               timelineTime={timelineTime}
               timelinePlaying={timelinePlaying}
@@ -1200,7 +1630,16 @@ export default function EditorPage({ project, onExit }: Props) {
             />
           )}
         </section>
-        <aside className={`right-panel${rightPanelCollapsed ? ' collapsed' : ''}`}>
+        <aside
+          className={`right-panel${rightPanelCollapsed ? ' collapsed' : ''}`}
+        >
+          <div
+            className="panel-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            title="拖拽调整属性面板宽度"
+            onPointerDown={startResizeRight}
+          />
           <button
             className="panel-edge-button panel-collapse-button"
             onClick={() => setRightPanelCollapsed(true)}
@@ -1245,7 +1684,7 @@ export default function EditorPage({ project, onExit }: Props) {
                 </button>
               </div>
               {inspectorTab === 'properties' ? (
-                <Inspector selected={selected} setNode={setNode} />
+                <Inspector selected={selected} nodes={scene.nodes} setNode={setNode} />
               ) : inspectorTab === 'data' ? (
                 <DataSourcePanel
                   selected={selected}
@@ -1255,12 +1694,18 @@ export default function EditorPage({ project, onExit }: Props) {
                   onPatchSource={patchDataSource}
                   onDeleteSource={deleteDataSource}
                   onAddBinding={addDataBinding}
+                  onUpdateBinding={updateDataBinding}
                   onDeleteBinding={deleteDataBinding}
                   onTestSource={async (source) => {
                     setDataSourceStatus('测试中…');
                     try {
-                      await testDataSource(source);
-                      setDataSourceStatus('连接成功');
+                      const result = await testDataSource(source, project.id);
+                      patchDataSource(source.id, { sample: result.data });
+                      setDataSourceStatus(
+                        result.fields.length
+                          ? `连接成功，识别 ${result.fields.length} 个字段（点击字段可填充路径）`
+                          : '连接成功',
+                      );
                     } catch (error) {
                       setDataSourceStatus(error instanceof Error ? error.message : '连接失败');
                     }
@@ -1275,7 +1720,11 @@ export default function EditorPage({ project, onExit }: Props) {
                   onAddEvent={addNodeEventRule}
                   onPatchRule={patchEventRule}
                   onPatchAction={patchEventAction}
+                  onAddAction={addEventAction}
+                  onMoveAction={moveEventAction}
+                  onDeleteAction={deleteEventAction}
                   onDeleteEvent={deleteEventRule}
+                  sources={scene.dataSources ?? []}
                 />
               )}
             </>
@@ -1294,6 +1743,16 @@ export default function EditorPage({ project, onExit }: Props) {
           errors={runtimeErrors}
           onClose={() => setShowReleases(false)}
           onRollback={(release) => void handleRollback(release)}
+          onDeleteError={(errorId) => void handleDeleteError(errorId)}
+          onClearErrors={() => void handleClearErrors()}
+        />
+      )}
+      {publishIssues !== null && (
+        <PublishDialog
+          issues={publishIssues}
+          nodeCount={scene.nodes.length}
+          onCancel={() => setPublishIssues(null)}
+          onConfirm={(notes) => void handlePublish(notes)}
         />
       )}
       {toast && (

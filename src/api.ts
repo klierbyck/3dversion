@@ -405,6 +405,59 @@ export async function reportRuntimeError(
   }
 }
 
+export type RuntimeErrorQuery = {
+  version?: string;
+  type?: string;
+  level?: string;
+  start?: string;
+  end?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type RuntimeErrorPage = {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: RuntimeError[];
+};
+
+export async function listRuntimeErrors(
+  projectId: string,
+  query: RuntimeErrorQuery = {},
+): Promise<RuntimeErrorPage> {
+  const empty: RuntimeErrorPage = { total: 0, page: query.page ?? 1, pageSize: query.pageSize ?? 50, items: [] };
+  if (!API_BASE) return empty;
+  try {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+    });
+    const response = await fetch(`${API_BASE}/projects/${projectId}/errors?${params.toString()}`);
+    if (response.ok) {
+      const body = await response.json();
+      if (body?.data?.items) return body.data as RuntimeErrorPage;
+    }
+  } catch {
+    /* 后端不可用时返回空页，由调用方合并本会话内存错误。 */
+  }
+  return empty;
+}
+
+export async function deleteRuntimeError(projectId: string, errorId: string): Promise<void> {
+  if (!API_BASE) return;
+  const res = await fetch(`${API_BASE}/projects/${projectId}/errors/${errorId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('错误日志删除失败');
+}
+
+export async function clearRuntimeErrors(projectId: string): Promise<void> {
+  if (!API_BASE) return;
+  const res = await fetch(`${API_BASE}/projects/${projectId}/errors`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('错误日志清空失败');
+}
+
 function assetKind(file: File): AssetMeta['kind'] {
   return file.type.startsWith('image/') ? 'image' : 'model';
 }
@@ -490,13 +543,167 @@ export async function uploadAsset(projectId: string, file: File): Promise<AssetM
   return asset;
 }
 
-export async function testDataSource(source: SceneDataSource): Promise<unknown> {
+export async function deleteAsset(projectId: string, assetId: string): Promise<void> {
+  if (API_BASE) {
+    const response = await fetch(`${API_BASE}/assets/${assetId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const json = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(json?.detail || `删除资源失败：HTTP ${response.status}`);
+    }
+    return;
+  }
+  const store = readStore();
+  const project = store[projectId];
+  if (!project) return;
+  store[projectId] = {
+    ...project,
+    assets: (project.assets ?? []).filter((asset) => asset.id !== assetId),
+  };
+  writeStore(store);
+}
+
+export type DataFieldSample = { path: string; type: string; sample?: string };
+export type DataSourceResult = {
+  data: unknown;
+  fields: DataFieldSample[];
+  attempts?: number;
+};
+
+/** 从 JSON 数据中提取叶子字段路径与类型样例（无后端本地模式下使用，逻辑对齐后端）。 */
+export function extractDataFields(
+  input: unknown,
+  prefix = '',
+  depth = 0,
+): DataFieldSample[] {
+  const fields: DataFieldSample[] = [];
+  if (depth > 3) return fields;
+  if (Array.isArray(input)) {
+    if (input.length > 0) return extractDataFields(input[0], `${prefix}[]`, depth + 1);
+    return prefix ? [{ path: prefix, type: 'array', sample: '[]' }] : fields;
+  }
+  if (input && typeof input === 'object') {
+    for (const [key, value] of Object.entries(input as Record<string, unknown>).slice(0, 30)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      fields.push(...extractDataFields(value, path, depth + 1));
+      if (fields.length >= 60) break;
+    }
+    return fields;
+  }
+  const type =
+    typeof input === 'boolean'
+      ? 'boolean'
+      : typeof input === 'number'
+        ? 'number'
+        : input === null
+          ? 'null'
+          : 'string';
+  let sample = input === null ? 'null' : String(input);
+  if (sample.length > 40) sample = `${sample.slice(0, 40)}…`;
+  return prefix ? [{ path: prefix, type, sample }] : fields;
+}
+
+function localAuthHeaders(source: SceneDataSource): Record<string, string> {
+  const value = (source.authValue ?? '').trim();
+  if (!source.authType || source.authType === 'none' || !value) return {};
+  if (source.authType === 'bearer') return { Authorization: `Bearer ${value}` };
+  if (source.authType === 'apiKey') return { 'X-API-Key': value };
+  if (source.authType === 'basic' && value.includes(':')) {
+    return { Authorization: `Basic ${btoa(unescape(encodeURIComponent(value)))}` };
+  }
+  return {};
+}
+
+/** 浏览器直连外部数据源（仅在未配置后端或显式关闭代理时使用）。 */
+async function directRest(source: SceneDataSource): Promise<DataSourceResult> {
+  let url = source.url ?? '';
+  if (source.params) {
+    const search = new URLSearchParams(source.params).toString();
+    if (search) url += `${url.includes('?') ? '&' : '?'}${search}`;
+  }
+  const method = source.method === 'POST' ? 'POST' : 'GET';
+  const headers: Record<string, string> = { ...(source.headers ?? {}), ...localAuthHeaders(source) };
+  if (method === 'POST' && source.body && !('Content-Type' in headers)) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const controller = new AbortController();
+  const timer = window.setTimeout(
+    () => controller.abort(),
+    (source.timeout ?? 10) * 1000,
+  );
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      signal: controller.signal,
+      body: method === 'POST' ? source.body : undefined,
+    });
+    if (!response.ok) throw new Error(`数据请求失败：HTTP ${response.status}`);
+    const data = await response.json();
+    return { data, fields: extractDataFields(data) };
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function postDataSourceEndpoint(
+  action: 'test' | 'fetch',
+  source: SceneDataSource,
+  projectId?: string,
+): Promise<DataSourceResult> {
+  return fetch(`${API_BASE}/data-sources/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...source,
+      projectId,
+      sourceId: source.id,
+      ...(action === 'fetch' ? { authValue: undefined } : {}),
+    }),
+  }).then(async (response) => {
+    const json = (await response.json().catch(() => null)) as
+      | { detail?: string; data?: { data: unknown; fields?: DataFieldSample[]; attempts?: number } }
+      | null;
+    if (!response.ok) throw new Error(json?.detail || `数据源请求失败：HTTP ${response.status}`);
+    const inner = json?.data;
+    return {
+      data: inner?.data,
+      fields: Array.isArray(inner?.fields) ? inner!.fields! : [],
+      attempts: inner?.attempts,
+    };
+  });
+}
+
+/** 运行态拉取：优先服务端代理（凭证不出浏览器），无后端时直连。 */
+export async function fetchDataSource(
+  source: SceneDataSource,
+  projectId?: string,
+): Promise<DataSourceResult> {
   if (source.type === 'json') {
-    return JSON.parse(source.json || '{}');
+    const data = JSON.parse(source.json || '{}');
+    return { data, fields: extractDataFields(data) };
+  }
+  if (source.type !== 'rest') throw new Error('仅 REST 数据源支持拉取');
+  if (!source.url) throw new Error('请填写数据源地址');
+  if (API_BASE && source.useProxy !== false)
+    return postDataSourceEndpoint('fetch', source, projectId);
+  return directRest(source);
+}
+
+export async function testDataSource(
+  source: SceneDataSource,
+  projectId?: string,
+): Promise<DataSourceResult> {
+  if (source.type === 'json') {
+    const data = JSON.parse(source.json || '{}');
+    return { data, fields: extractDataFields(data) };
   }
   if (!source.url) throw new Error('请填写数据源地址');
   if (source.type === 'websocket') {
-    return await new Promise((resolve, reject) => {
+    if (API_BASE) {
+      // 后端仅校验地址格式，连通性仍由浏览器握手确认。
+      await postDataSourceEndpoint('test', source, projectId);
+    }
+    return await new Promise<DataSourceResult>((resolve, reject) => {
       const socket = new WebSocket(source.url!);
       const timer = window.setTimeout(
         () => {
@@ -508,7 +715,7 @@ export async function testDataSource(source: SceneDataSource): Promise<unknown> 
       socket.onopen = () => {
         window.clearTimeout(timer);
         socket.close();
-        resolve({ connected: true });
+        resolve({ data: { connected: true }, fields: [] });
       };
       socket.onerror = () => {
         window.clearTimeout(timer);
@@ -516,17 +723,7 @@ export async function testDataSource(source: SceneDataSource): Promise<unknown> 
       };
     });
   }
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), (source.timeout ?? 10) * 1000);
-  try {
-    const response = await fetch(source.url, {
-      method: 'GET',
-      headers: source.headers,
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`数据请求失败：HTTP ${response.status}`);
-    return await response.json();
-  } finally {
-    window.clearTimeout(timer);
-  }
+  if (API_BASE && source.useProxy !== false)
+    return postDataSourceEndpoint('test', source, projectId);
+  return directRest(source);
 }

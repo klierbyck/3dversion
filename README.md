@@ -28,12 +28,15 @@
 - Three.js 三维画布、网格、坐标轴、节点选择和基础对象渲染
 - 画布 Gizmo：对象移动、旋转、缩放，支持 0.5 单位移动吸附和 15 度旋转吸附
 - 鼠标拖拽落点：按画布射线计算地面坐标，组件不会再固定出现在默认位置
+- 真实资源库：上传 GLB、单文件 GLTF、PNG、JPG、WebP；图片显示缩略图，资源通过点击加入场景并可安全删除
+- 资源上传前同步校验文件签名与 GLTF/GLB 结构，外部 `.bin`/纹理依赖的多文件 GLTF 会明确拒绝并提示改用自包含 GLB
 - 场景树：选择、折叠/展开、点击眼睛图标切换对象可见性和层级展示
 - 属性编辑：名称、位置、旋转、缩放、颜色、透明度、文本、数值、可见和锁定；锁定对象不可删除并给出提示
 - 运行态预览：隐藏编辑器工具栏，展示只读 3D 场景；标题、副标题与指标卡跟随项目配置（指标为示例数据）
 - 场景编排与对象事件分层：顶部「场景编排」管理整个画布的场景时间轴和场景事件，右侧「对象事件」只管理当前选中建筑/设备的点击、双击和悬停交互
 - 事件规则闭环：支持相机聚焦、显示弹窗、设置颜色、显示/隐藏；场景级规则和对象级规则均随草稿、发布版本和回滚持久化
 - 六个内置示例项目均已配置业务事件，可在预览模式中点击关键对象验证交互效果
+- 数据源绑定：支持静态 JSON、REST GET/POST 和 WebSocket，可绑定数值、文字、颜色、透明度和显隐；柱图、折线图、仪表盘会随数值实时更新
 - 发布版本、发布记录（本地模式下持久化到 localStorage，刷新不丢失）、回滚和基础运行错误列表
 - 可用的撤销/重做（保留 50 步历史，撤销后保持当前选择）、网格开关、场景 JSON 导出以及 W/E/R 模式快捷键
 - 返回项目中心时若有未保存变更，自动补一次保存，避免切换页面丢数据
@@ -48,7 +51,7 @@
 - 尊重系统「减弱动态效果」偏好（`prefers-reduced-motion`）
 - 最低支持 1280px 宽桌面屏；编辑器三栏按 `clamp()` 流式收缩，不做移动端适配
 
-V1 为可运行 MVP。GLTF 组件在前端使用占位几何体承载节点流程，真实模型上传和 GLTFLoader 资源管线可在后续迭代接入；后端当前使用内存仓储，便于零配置开发，生产环境按需求规格接入 PostgreSQL、Redis 和本地数据盘。
+当前版本为可运行的单机 MVP。真实模型通过 `GLTFLoader` 加载；项目索引、草稿、发布版本、资源元数据和运行错误持久化到 `DATA_DIR`。数据源凭证使用 Fernet 独立加密保存，不会出现在草稿、发布产物或运行态响应中。当前持久化方案面向单个 FastAPI 进程，多实例部署仍需 PostgreSQL/Redis。
 
 ## 页面与路由
 
@@ -71,20 +74,23 @@ V1 为可运行 MVP。GLTF 组件在前端使用占位几何体承载节点流�
 │   ├── demos.ts                 # 内置示例项目场景与运行态指标配置
 │   ├── SceneCanvas.tsx          # Three.js 场景生命周期与交互
 │   ├── sceneObjects.ts          # Three.js 内置对象工厂与资源释放
+│   ├── threeText.ts             # 中文 3D 文字与贴图回退
 │   ├── api.ts                   # 项目/草稿/发布接口与本地降级
 │   ├── types.ts                 # 场景、组件、事件与项目类型
 │   └── styles.css               # 深色工作台样式（设计令牌 + 细滚动条 + 自适应）
 ├── backend/                     # FastAPI 后端
 │   ├── main.py                  # FastAPI 应用与 CORS 装配
 │   ├── models.py                # API 请求模型
-│   ├── store.py                 # 内存项目状态与示例初始化
+│   ├── store.py                 # DATA_DIR 项目索引与示例初始化
+│   ├── storage.py               # 资源与发布产物的磁盘存储
+│   ├── security.py              # 数据源凭证加密仓
+│   ├── asset_validation.py      # GLTF/GLB/图片同步校验
 │   ├── common.py                # 统一响应结构
 │   ├── routes/                  # 项目版本、资源、运行态与数据源路由
 │   ├── requirements.txt
-│   ├── .dockerignore
-│   └── Dockerfile
-├── scripts/backup.ps1           # 本地资源备份脚本
-├── docker-compose.yml           # 单机部署编排（PostgreSQL/Redis 通过 storage profile 启用）
+├── public/fonts/                # 浏览器运行时使用的 Three.js 字体与许可证
+├── scripts/fonts/               # 字体子集生成和验证脚本，不放运行时文件
+├── scripts/backup.ps1           # 单机 DATA_DIR 备份脚本
 ├── 3D可视化拖拽系统-最终需求规格说明书.md
 └── README.md
 ```
@@ -94,7 +100,6 @@ V1 为可运行 MVP。GLTF 组件在前端使用占位几何体承载节点流�
 - Node.js 20 或更高版本
 - npm 10 或更高版本
 - Python 3.11 或更高版本（启动 FastAPI 时需要）
-- Docker Desktop（仅使用 Docker Compose 时需要）
 - 支持 WebGL 的现代 Chrome 或 Edge（最低支持 1280px 宽桌面屏）
 
 ## 本地运行：仅前端
@@ -139,6 +144,22 @@ uvicorn main:app --reload --port 8000
 
 API 健康检查：`http://localhost:8000/api/health`
 
+### 后端数据与安全配置
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `DATA_DIR` | 项目根目录下的 `data/` | 项目索引、资源、发布产物、任务和加密凭证目录 |
+| `APP_SECRET_KEY` | 自动生成 `DATA_DIR/.secret-key` | 数据源凭证加密主密钥；生产环境应固定配置并妥善备份 |
+| `DATA_SOURCE_ALLOW_PRIVATE` | `0` | 默认拒绝本机、私网和保留地址；仅在明确可信的内网数据源环境设为 `1` |
+| `ALLOWED_ORIGINS` | 空 | 跨域部署时允许访问 API 的前端来源，多个值用逗号分隔 |
+
+资源上传接口已经同步完成校验，正常使用不依赖单独启动 Worker。`backend/worker.py` 仅保留文件任务队列的维护入口；目录初始化、发布文件检查和资源重验可执行：
+
+```powershell
+python -m backend.migrate
+python -m backend.migrate --recheck
+```
+
 ## 生产构建
 
 ```powershell
@@ -148,22 +169,6 @@ npm run preview
 
 构建产物位于 `dist/`。生产环境建议由 Nginx 托管 `dist/`，并将 `/api` 反向代理到 FastAPI。
 
-## Docker Compose 部署
-
-在安装 Docker 的服务器上执行：
-
-```bash
-docker compose up -d --build
-```
-
-默认只启动 FastAPI。PostgreSQL 和 Redis 为后续仓储与队列预留，需要时通过 storage profile 启用：
-
-```bash
-docker compose --profile storage up -d
-```
-
-说明：当前 API 仍使用内存数据仓储，重启后数据不保留。生产部署前必须替换 `POSTGRES_PASSWORD`（建议配合 `.env` 使用），并使用 Nginx/HTTPS 对外提供同源服务。
-
 ## 备份
 
 Windows 开发环境可执行：
@@ -172,7 +177,22 @@ Windows 开发环境可执行：
 .\scripts\backup.ps1
 ```
 
-脚本会压缩 `data/assets` 和 `data/releases`。正式接入 PostgreSQL 后，应额外执行 `pg_dump`，并把备份复制到服务器之外的本地电脑、NAS 或对象存储。
+脚本会读取 `DATA_DIR`（未配置时使用项目根目录的 `data/`），一起压缩 `assets`、`releases`、`projects.json`、`secrets.json` 和 `.secret-key`。`.secret-key` 必须与 `secrets.json` 成组恢复，否则历史凭证无法解密。备份完成后应把压缩包复制到项目目录之外的本地电脑、NAS 或对象存储。
+
+## 字体文件
+
+- `public/fonts/noto-sans-sc-subset.typeface.json` 是浏览器运行时资源，`src/threeText.ts` 会直接加载，因此需要提交。
+- `scripts/fonts/*.py`、`*.mjs` 是字体子集生成与验证工具。
+- `scripts/fonts/*.ttf` 和 `scripts/fonts/chars.txt` 是本地输入/中间产物，已加入 `.gitignore`，不需要提交。
+- `public/fonts/OFL.txt` 是随运行时字体保留的 SIL Open Font License。
+
+需要重新生成字体时，在本地准备 `scripts/fonts/NotoSansSC-VF.ttf`，然后执行：
+
+```powershell
+python scripts/fonts/make_subset.py
+node scripts/fonts/ttf_to_typeface.mjs
+node scripts/fonts/verify_font.mjs
+```
 
 ## 关键接口
 
@@ -187,10 +207,15 @@ Windows 开发环境可执行：
 | GET/PUT | `/api/projects/{id}/draft` | 读取/保存草稿（409 表示版本冲突） | ✅ 已接入 |
 | POST | `/api/projects/{id}/releases` | 创建发布版本 | ✅ 已接入 |
 | GET | `/api/projects/{id}/releases` | 查询历史版本 | ✅ 已接入 |
+| GET/POST | `/api/projects/{id}/assets` | 查询/上传项目资源 | ✅ 已接入 |
+| GET/DELETE | `/api/assets/{id}` | 查询/删除资源元数据 | ✅ 已接入 |
+| GET | `/api/assets/{id}/content` | 读取资源内容 | ✅ 已接入 |
+| POST | `/api/data-sources/test` | 测试数据源并提取字段 | ✅ 已接入 |
+| POST | `/api/data-sources/fetch` | 运行态代理拉取数据 | ✅ 已接入 |
 | POST | `/api/runtime/errors` | 上报运行错误（按 projectId 归属） | ✅ 已接入 |
 | POST | `/api/releases/{id}/rollback` | 回滚版本 | 暂未接入（前端本地回滚） |
 | GET | `/api/runtime/{id}` | 获取运行态场景 | 暂未接入（预览使用当前场景） |
-| GET | `/api/projects/{id}/errors` | 查询运行错误列表 | 暂未接入 |
+| GET/DELETE | `/api/projects/{id}/errors` | 查询/清理运行错误列表 | ✅ 已接入 |
 | WS | `/api/runtime/{id}/ws` | 实时数据通道（回声占位） | 暂未接入 |
 
 说明：后端已预置 6 个示例项目的元信息（草稿内容为空）；前端打开未保存过草稿的示例项目时，会使用 `src/demos.ts` 中的内置场景作为编辑起点，首次自动保存后即持久化到后端。
@@ -218,9 +243,15 @@ Windows 开发环境可执行：
 ## 验证命令
 
 ```powershell
+npm test -- --run
 npm run build
+python -m unittest tests_backend.test_backend -v
 python -m compileall backend
 ```
+
+当前验证基线：前端共 5 个测试文件、42 项测试通过（包含 Schema 字段、边界校验、
+嵌套更新与发布阻断专项覆盖）；生产构建通过。Vite 仍会报告约 1.1 MB 主包体积警告，
+属于后续按路由拆包的性能优化项，不影响当前功能运行。
 
 ## 代码格式化
 
@@ -245,10 +276,11 @@ npm run format:check
 
 ## 已知限制
 
-- 当前后端使用内存字典，不适合重启后持久化和多进程生产运行。
-- 当前 GLTF 组件使用占位几何体，真实模型上传、解析、压缩和本地资源鉴权需要后续实现。
+- 当前文件仓储支持单进程重启恢复，不支持多个 FastAPI Worker 并发写入；多实例生产环境需接入 PostgreSQL/Redis。
+- 当前上传支持 GLB 和自包含单文件 GLTF，不支持多文件 GLTF、分片上传、模型压缩和自动 LOD。
 - 预览运行态渲染的是当前编辑场景而非服务端已发布版本；回滚在前端完成后保存为新草稿。
-- 场景时间轴已支持时长、循环播放、播放头拖动以及位置/旋转/缩放/颜色/透明度/显隐关键帧；场景级/对象级事件已支持基础可用闭环，但暂不支持多动作排序、复杂条件表达式和数据源触发。
+- 场景时间轴和事件动作已支持排序、条件与数据源触发；更复杂的脚本动作仍不开放。
 - 后端 WebSocket 为回声占位，实时数据推送需要按需求规格接入。
-- 认证、RBAC、PostgreSQL 持久化和 Redis 队列需要按照最终需求规格说明书接入生产模块。
+- 用户认证、RBAC、资源访问鉴权和完整审计日志仍属于生产化增强。
+- 前端生产包包含 Three.js 和字体资源，当前 JavaScript 主包约 1.1 MB，后续需要按路由拆包。
 - 界面按 1280px 及以上桌面屏设计，未适配移动端。

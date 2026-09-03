@@ -1,4 +1,11 @@
+import json
+import os
 from datetime import datetime, timezone
+
+try:
+    from . import storage
+except ImportError:
+    import storage
 
 
 def new_project(project_id: str, name: str, description: str, is_demo: bool) -> dict:
@@ -14,12 +21,12 @@ def new_project(project_id: str, name: str, description: str, is_demo: bool) -> 
         "releases": [],
         "errors": [],
         "assets": [],
-        "asset_content": {},
     }
 
 
-# 预置示例项目：场景内容由前端 demo 目录提供，后端只保存元信息与用户后续编辑的草稿。
-projects: dict[str, dict] = {
+def _builtin_projects() -> dict[str, dict]:
+    """场景内容由前端 demo 提供，后端保存元信息与用户后续编辑的草稿。"""
+    return {
     "demo-park": new_project(
         "demo-park",
         "智慧楼宇与园区安防",
@@ -56,4 +63,41 @@ projects: dict[str, dict] = {
         "覆盖服务器机柜、制冷、UPS 配电与动环监控的数据中心基础设施场景",
         True,
     ),
-}
+    }
+
+
+def _projects_path():
+    return storage.ensure_dirs() / "projects.json"
+
+
+def _load_projects() -> dict[str, dict]:
+    builtins = _builtin_projects()
+    path = _projects_path()
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                builtins.update(
+                    (project_id, project)
+                    for project_id, project in loaded.items()
+                    if isinstance(project_id, str) and isinstance(project, dict)
+                )
+        except (OSError, json.JSONDecodeError):
+            # 保留损坏文件供排查，以内置项目恢复启动。
+            corrupt = path.with_suffix(".json.corrupt")
+            try:
+                os.replace(path, corrupt)
+            except OSError:
+                pass
+    return builtins
+
+
+def persist_projects() -> None:
+    """单进程仓储的原子快照，避免服务重启后项目和资源索引丢失。"""
+    path = _projects_path()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(projects, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+projects: dict[str, dict] = _load_projects()

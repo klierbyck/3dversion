@@ -9,6 +9,10 @@ __pycache__/
 vite.config.js
 vite.config.d.ts
 
+# 字体生成输入与中间产物；运行时只提交 public/fonts/*.typeface.json。
+scripts/fonts/*.ttf
+scripts/fonts/chars.txt
+
 # Playwright / 浏览器自动化临时产物
 .playwright-cli/
 playwright-report/

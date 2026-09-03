@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, Lock, LockOpen } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Lock,
+  LockOpen,
+} from 'lucide-react';
 import type { NodeKind, SceneNode } from '../types';
 
 /** 组件分类横向滚动条：两端箭头按钮滚动，滚动到边界时对应箭头置灰。 */
@@ -69,92 +77,194 @@ export function CategoryScroller({
   );
 }
 
-export function Tree({
-  nodes,
-  parentId,
-  level,
-  selectedId,
-  collapsedIds,
-  onSelect,
-  onToggleVisible,
-  onToggleLocked,
-  onToggleCollapsed,
-  iconFor,
-}: {
+/** nodeId 是否为 ancestorId 的后代（用于禁止把节点拖进自己的子树）。 */
+function isDescendant(nodes: SceneNode[], ancestorId: string, nodeId: string): boolean {
+  let current = nodes.find((item) => item.id === nodeId);
+  while (current?.parentId) {
+    if (current.parentId === ancestorId) return true;
+    current = nodes.find((item) => item.id === current?.parentId);
+  }
+  return false;
+}
+
+type TreeProps = {
   nodes: SceneNode[];
   parentId: string | null;
   level: number;
   selectedId: string | null;
+  selectedIds: string[];
   collapsedIds: Set<string>;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, additive?: boolean) => void;
   onToggleVisible: (id: string) => void;
   onToggleLocked: (id: string) => void;
   onToggleCollapsed: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  onReparent: (id: string, newParentId: string | null) => void;
+  onFocus: (id: string) => void;
   iconFor: (kind: NodeKind) => ReactNode;
-}) {
+};
+
+export function Tree(props: TreeProps) {
+  const { nodes, parentId } = props;
   return (
     <>
       {nodes
         .filter((node) => node.parentId === parentId)
         .map((node) => {
           const hasChildren = nodes.some((item) => item.parentId === node.id);
-          const collapsed = collapsedIds.has(node.id);
           return (
-            <div key={node.id}>
-              <div className={`tree-row ${selectedId === node.id ? 'selected' : ''}`}>
-                {hasChildren ? (
-                  <button
-                    className="tree-caret"
-                    title={collapsed ? '展开子节点' : '折叠子节点'}
-                    aria-expanded={!collapsed}
-                    onClick={() => onToggleCollapsed(node.id)}
-                  >
-                    {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                  </button>
-                ) : (
-                  <span className="tree-spacer" />
-                )}
-                <button
-                  className="tree-main"
-                  style={{ paddingLeft: level * 16 }}
-                  onClick={() => onSelect(node.id)}
-                >
-                  {iconFor(node.kind)}
-                  <span>{node.name}</span>
-                </button>
-                <button
-                  className={`tree-action ${node.visible ? '' : 'muted'}`}
-                  title={node.visible ? '隐藏对象' : '显示对象'}
-                  onClick={() => onToggleVisible(node.id)}
-                >
-                  {node.visible ? <Eye size={13} /> : <EyeOff size={13} />}
-                </button>
-                <button
-                  className={`tree-action tree-lock-action ${node.locked ? 'locked' : 'muted'}`}
-                  title={node.locked ? '解锁对象' : '锁定对象'}
-                  aria-label={node.locked ? `解锁${node.name}` : `锁定${node.name}`}
-                  onClick={() => onToggleLocked(node.id)}
-                >
-                  {node.locked ? <Lock size={13} /> : <LockOpen size={13} />}
-                </button>
-              </div>
-              {hasChildren && !collapsed && (
-                <Tree
-                  nodes={nodes}
-                  parentId={node.id}
-                  level={level + 1}
-                  selectedId={selectedId}
-                  collapsedIds={collapsedIds}
-                  onSelect={onSelect}
-                  onToggleVisible={onToggleVisible}
-                  onToggleLocked={onToggleLocked}
-                  onToggleCollapsed={onToggleCollapsed}
-                  iconFor={iconFor}
-                />
-              )}
-            </div>
+            <TreeRow key={node.id} {...props} node={node} hasChildren={hasChildren} />
           );
         })}
     </>
+  );
+}
+
+function TreeRow({
+  nodes,
+  node,
+  hasChildren,
+  level,
+  selectedId,
+  selectedIds,
+  collapsedIds,
+  onSelect,
+  onToggleVisible,
+  onToggleLocked,
+  onToggleCollapsed,
+  onRename,
+  onReparent,
+  onFocus,
+  iconFor,
+}: TreeProps & { node: SceneNode; hasChildren: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(node.name);
+  const [dropOver, setDropOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const collapsed = collapsedIds.has(node.id);
+  const isSelected = selectedIds.includes(node.id);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const commitRename = () => {
+    const name = draft.trim();
+    if (name && name !== node.name) onRename(node.id, name.slice(0, 64));
+    setEditing(false);
+  };
+
+  return (
+    <div>
+      <div
+        className={`tree-row ${isSelected ? 'selected' : ''} ${selectedId === node.id ? 'primary' : ''} ${dropOver ? 'drop-over' : ''}`}
+        data-node-id={node.id}
+        draggable={!editing}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('tree-node', node.id);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          if (!dropOver) setDropOver(true);
+        }}
+        onDragLeave={() => setDropOver(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDropOver(false);
+          const dragId = event.dataTransfer.getData('tree-node');
+          if (!dragId || dragId === node.id) return;
+          if (isDescendant(nodes, node.id, dragId)) return;
+          onReparent(dragId, node.id);
+        }}
+      >
+        {hasChildren ? (
+          <button
+            className="tree-caret"
+            title={collapsed ? '展开子节点' : '折叠子节点'}
+            aria-expanded={!collapsed}
+            onClick={() => onToggleCollapsed(node.id)}
+          >
+            {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+          </button>
+        ) : (
+          <span className="tree-spacer" />
+        )}
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="tree-name-input"
+            style={{ marginLeft: level * 16 }}
+            value={draft}
+            maxLength={64}
+            onChange={(event) => setDraft(event.target.value)}
+            onClick={(event) => event.stopPropagation()}
+            onBlur={commitRename}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commitRename();
+              if (event.key === 'Escape') {
+                setDraft(node.name);
+                setEditing(false);
+              }
+            }}
+          />
+        ) : (
+          <button
+            className="tree-main"
+            style={{ paddingLeft: level * 16 }}
+            onClick={() => {
+              // 单击行：选中并聚焦到该对象（已取消 Ctrl 加选）。
+              onSelect(node.id);
+              onFocus(node.id);
+            }}
+            onDoubleClick={() => {
+              setDraft(node.name);
+              setEditing(true);
+            }}
+            title="单击选中并聚焦，双击重命名，可拖拽调整层级"
+          >
+            {iconFor(node.kind)}
+            <span>{node.name}</span>
+          </button>
+        )}
+        <button
+          className={`tree-action ${node.visible ? '' : 'muted'}`}
+          title={node.visible ? '隐藏对象' : '显示对象'}
+          onClick={() => onToggleVisible(node.id)}
+        >
+          {node.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+        </button>
+        <button
+          className={`tree-action tree-lock-action ${node.locked ? 'locked' : 'muted'}`}
+          title={node.locked ? '解锁对象' : '锁定对象'}
+          aria-label={node.locked ? `解锁${node.name}` : `锁定${node.name}`}
+          onClick={() => onToggleLocked(node.id)}
+        >
+          {node.locked ? <Lock size={13} /> : <LockOpen size={13} />}
+        </button>
+      </div>
+      {hasChildren && !collapsed && (
+        <Tree
+          nodes={nodes}
+          parentId={node.id}
+          level={level + 1}
+          selectedId={selectedId}
+          selectedIds={selectedIds}
+          collapsedIds={collapsedIds}
+          onSelect={onSelect}
+          onToggleVisible={onToggleVisible}
+          onToggleLocked={onToggleLocked}
+          onToggleCollapsed={onToggleCollapsed}
+          onRename={onRename}
+          onReparent={onReparent}
+          onFocus={onFocus}
+          iconFor={iconFor}
+        />
+      )}
+    </div>
   );
 }

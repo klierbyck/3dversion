@@ -7,8 +7,12 @@ export type NodeKind =
   | 'model'
   | 'text'
   | 'light'
+  | 'directionalLight'
+  | 'ambientLight'
   | 'camera'
   | 'bar'
+  | 'line'
+  | 'gauge'
   | 'label'
   | 'popup'
   | 'building'
@@ -57,6 +61,18 @@ export type NodeKind =
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 
+/** GLTF 模型内嵌动画的播放配置；LOD 多档模型 V1 预留、暂不支持上传多精度。 */
+export type NodeAnimation = {
+  autoplay: boolean;
+  /** 播放的动画片段序号，-1 表示第一个/全部片段。 */
+  clip: number;
+  playing: boolean;
+  /** LOD 预留：未来存放多档模型资源 id，V1 不参与渲染。 */
+  lodLevels?: string[];
+};
+
+export type CameraProjection = 'perspective' | 'orthographic';
+
 export type SceneNode = {
   id: string;
   name: string;
@@ -73,6 +89,32 @@ export type SceneNode = {
   value?: number;
   assetPath?: string;
   dataBindings?: SceneDataBinding[];
+  /** 业务 ID：对接外部系统时的唯一业务编码（如设备编号）。 */
+  businessId?: string;
+  /** 标签：用于分组检索与批量管理。 */
+  tags?: string[];
+  // 灯光属性（点/平行/环境光）
+  intensity?: number;
+  castShadow?: boolean;
+  /** 点光源照射距离，0 表示不衰减。 */
+  distance?: number;
+  // 观察相机组件属性
+  cameraProjection?: CameraProjection;
+  fov?: number;
+  near?: number;
+  far?: number;
+  // 3D 文字属性
+  fontSize?: number;
+  extrudeDepth?: number;
+  /** true：始终面向相机；false：固定朝向的立体文字。 */
+  billboard?: boolean;
+  // 图表属性
+  /** 折线图序列（柱图用 value，折线图用 series）。 */
+  series?: number[];
+  min?: number;
+  max?: number;
+  // 模型动画
+  animation?: NodeAnimation;
 };
 
 export type AssetKind = 'model' | 'image';
@@ -86,33 +128,75 @@ export type AssetMeta = {
   kind: AssetKind;
   url: string;
   createdAt: string;
+  validationStatus?: 'validated' | 'pending' | 'failed';
 };
 
 export type DataSourceType = 'json' | 'rest' | 'websocket';
+export type DataSourceAuthType = 'none' | 'bearer' | 'apiKey' | 'basic';
 
 export type SceneDataSource = {
   id: string;
   name: string;
   type: DataSourceType;
   url?: string;
-  method?: 'GET';
+  method?: 'GET' | 'POST';
   headers?: Record<string, string>;
+  /** 查询参数（REST）。 */
+  params?: Record<string, string>;
+  /** 请求体（POST，JSON 字符串）。 */
+  body?: string;
   json?: string;
   refreshInterval?: number;
   timeout?: number;
+  /** 认证方式；凭证由服务端代理加密保存，不明文落草稿。 */
+  authType?: DataSourceAuthType;
+  authValue?: string;
+  /** 服务端已保存加密凭证；明文永不随草稿或运行态响应返回。 */
+  hasAuthValue?: boolean;
+  /** 是否经 FastAPI 代理访问（默认 true，关闭则浏览器直连，仅静态 JSON 例外）。 */
+  useProxy?: boolean;
+  /** 最近一次测试返回的字段样例（前端展示用，不参与发布）。 */
+  sample?: unknown;
 };
 
 export type SceneDataBindingProperty = 'value' | 'text' | 'color' | 'opacity' | 'visible';
+
+/** 数值阈值规则：满足比较条件时把组件染成指定颜色。 */
+export type DataThreshold = {
+  id: string;
+  op: '>' | '>=' | '<' | '<=' | '==' | '!=';
+  value: number;
+  color: string;
+};
 
 export type SceneDataBinding = {
   id: string;
   sourceId: string;
   path: string;
   property: SceneDataBindingProperty;
+  /** 数值保留小数位。 */
+  decimals?: number;
+  /** 文本前缀/后缀。 */
+  prefix?: string;
+  suffix?: string;
+  /** 数值阈值着色（仅 value 属性生效）。 */
+  thresholds?: DataThreshold[];
 };
 
-export type SceneEventTriggerType = 'click' | 'doubleClick' | 'hover' | 'sceneLoad';
-export type SceneEventActionType = 'focusCamera' | 'showPopup' | 'setColor' | 'setVisibility';
+export type SceneEventTriggerType =
+  | 'click'
+  | 'doubleClick'
+  | 'hover'
+  | 'sceneLoad'
+  | 'dataChange';
+export type SceneEventActionType =
+  | 'focusCamera'
+  | 'showPopup'
+  | 'setColor'
+  | 'setVisibility'
+  | 'setOpacity'
+  | 'playAnimation'
+  | 'refreshData';
 /** 事件归属范围：场景级规则由场景编排面板管理，对象级规则由选中对象管理。 */
 export type SceneEventScope = 'scene' | 'node';
 
@@ -123,6 +207,10 @@ export type SceneEventAction = {
   message?: string;
   color?: string;
   visible?: boolean;
+  /** setOpacity 目标透明度 0-1。 */
+  opacity?: number;
+  /** playAnimation：true 播放 / false 暂停。 */
+  play?: boolean;
 };
 
 export type SceneEventRule = {
@@ -136,8 +224,12 @@ export type SceneEventRule = {
   trigger: {
     type: SceneEventTriggerType;
     nodeId: string | null;
+    /** dataChange 触发时关联的数据源 ID；为空表示任意数据源变化。 */
+    sourceId?: string | null;
   };
   actions: SceneEventAction[];
+  /** 白名单条件表达式，如 value > 80 && status === "alarm"；为空表示无条件。 */
+  condition?: string;
 };
 
 export type SceneTimelineProperty =
@@ -164,6 +256,8 @@ export type SceneCameraKeyframe = {
 export type SceneTimeline = {
   duration: number;
   loop: boolean;
+  /** 播放速度：0.25 / 0.5 / 1 / 2；旧草稿缺省由 normalizeTimeline 补 1。 */
+  speed?: number;
   keyframes: SceneKeyframe[];
   /** 场景镜头关键帧，用于全景、推进、局部聚焦等演示镜头。 */
   cameraKeyframes?: SceneCameraKeyframe[];
@@ -184,11 +278,26 @@ export type Release = {
   createdAt: string;
   createdBy: string;
   scene: SceneDocument;
+  /** 发布说明。 */
+  notes?: string;
 };
+
+/** 运行错误级别与来源分类，对齐需求 §5.5。 */
+export type RuntimeErrorLevel = 'error' | 'warn';
+
 export type RuntimeError = {
   id: string;
   type: string;
+  level?: RuntimeErrorLevel;
   message: string;
+  /** 发生时的发布版本（编辑态为 draft）。 */
+  version?: string;
+  /** 关联的资源 URL 或接口地址。 */
+  source?: string;
+  /** 浏览器 UA。 */
+  browser?: string;
+  /** 链路追踪 ID。 */
+  traceId?: string;
   createdAt: string;
 };
 
@@ -200,15 +309,38 @@ export type RuntimeTheme = {
   metrics: RuntimeMetric[];
 };
 
+/** 项目发布状态：草稿 / 已发布。 */
+export type ProjectStatus = 'draft' | 'published';
+
 export type ProjectMeta = {
   id: string;
   name: string;
   description: string;
   icon: string;
   isDemo: boolean;
+  createdAt?: string;
   updatedAt?: string;
+  /** 最近编辑人。 */
+  lastEditor?: string;
   nodeCount?: number;
+  status?: ProjectStatus;
+  currentVersion?: string;
+  /** 画布缩略图（dataURL）。 */
+  thumbnail?: string;
+  /** 软删除标记与时间，进入回收站。 */
+  deleted?: boolean;
+  deletedAt?: string;
+  /** 由模板创建时记录模板 id。 */
+  templateFrom?: string;
   runtime?: RuntimeTheme;
+};
+
+/** 后端分页响应。 */
+export type PageResult<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
 };
 
 export type ComponentMeta = {
@@ -259,7 +391,7 @@ export const componentCatalog: ComponentMeta[] = [
     label: '3D 文字',
     category: '基础',
     icon: 'T',
-    description: '空间文字标牌',
+    description: '真实立体中文文字',
   },
   {
     kind: 'building',
@@ -613,6 +745,20 @@ export const componentCatalog: ComponentMeta[] = [
     description: '三维数据柱状图',
   },
   {
+    kind: 'line',
+    label: '折线图',
+    category: '数据',
+    icon: '∿',
+    description: '三维趋势折线图',
+  },
+  {
+    kind: 'gauge',
+    label: '仪表盘',
+    category: '数据',
+    icon: '◔',
+    description: '三维环形刻度仪表',
+  },
+  {
     kind: 'label',
     label: '数据标签',
     category: '数据',
@@ -631,21 +777,35 @@ export const componentCatalog: ComponentMeta[] = [
     label: 'GLTF 模型',
     category: '系统',
     icon: '◈',
-    description: '加载本地模型资源',
+    description: '加载本地模型资源（支持内嵌动画）',
+  },
+  {
+    kind: 'ambientLight',
+    label: '环境光',
+    category: '系统',
+    icon: '◌',
+    description: '均匀照亮整体场景',
+  },
+  {
+    kind: 'directionalLight',
+    label: '平行光',
+    category: '系统',
+    icon: '▸',
+    description: '带方向的主光源，可投影',
   },
   {
     kind: 'light',
     label: '点光源',
     category: '系统',
     icon: '✦',
-    description: '照亮场景',
+    description: '从位置向四周发光',
   },
   {
     kind: 'camera',
-    label: '相机',
+    label: '观察相机',
     category: '系统',
     icon: '◎',
-    description: '场景观察视角',
+    description: '可切换的场景观察机位',
   },
 ];
 
@@ -669,7 +829,7 @@ export function createNode(
     building: [1.2, 1.2, 1.2],
     factory: [1.1, 1.1, 1.1],
   };
-  return {
+  const base: SceneNode = {
     id: `${kind}-${uid()}`,
     name: meta?.label ?? '新节点',
     kind,
@@ -682,6 +842,44 @@ export function createNode(
     color: meta?.color ?? (kind === 'light' ? '#ffd166' : kind === 'image' ? '#ffffff' : '#34d399'),
     opacity: 1,
     text: kind === 'text' || kind === 'label' ? '设备状态' : undefined,
-    value: kind === 'bar' || kind === 'label' || kind === 'sensor' ? 72 : undefined,
+    value: kind === 'bar' || kind === 'label' || kind === 'sensor' || kind === 'gauge' ? 72 : undefined,
+    tags: [],
   };
+  if (kind === 'light') {
+    base.intensity = 1.4;
+    base.distance = 0;
+  }
+  if (kind === 'directionalLight') {
+    base.color = '#ffffff';
+    base.intensity = 1.2;
+    base.castShadow = true;
+  }
+  if (kind === 'ambientLight') {
+    base.color = '#ffffff';
+    base.intensity = 0.55;
+  }
+  if (kind === 'camera') {
+    base.cameraProjection = 'perspective';
+    base.fov = 50;
+    base.near = 0.1;
+    base.far = 1000;
+  }
+  if (kind === 'text') {
+    base.fontSize = 0.6;
+    base.extrudeDepth = 0.12;
+    base.billboard = false;
+  }
+  if (kind === 'line') {
+    base.series = [24, 42, 35, 68, 54, 76];
+    base.min = 0;
+    base.max = 100;
+  }
+  if (kind === 'gauge') {
+    base.min = 0;
+    base.max = 100;
+  }
+  if (kind === 'model') {
+    base.animation = { autoplay: true, clip: -1, playing: true };
+  }
+  return base;
 }

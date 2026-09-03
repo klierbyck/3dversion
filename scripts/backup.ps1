@@ -1,15 +1,28 @@
 param(
-  [string]$Target = ".\data\backups"
+  [string]$Target = "",
+  [string]$DataRoot = $env:DATA_DIR
 )
 
-# MVP 备份脚本：备份本地资源目录；接入 PostgreSQL 后可在此处增加 pg_dump。
+# Back up assets, releases, the project index, and encrypted credentials together.
+if (-not $DataRoot) {
+  $DataRoot = Join-Path $PSScriptRoot "..\data"
+}
+if (-not $Target) {
+  $Target = Join-Path $DataRoot "backups"
+}
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$archive = Join-Path $Target "threevision-assets-$stamp.zip"
-$paths = @(".\data\assets", ".\data\releases") | Where-Object { Test-Path $_ }
+$archive = Join-Path $Target "threevision-data-$stamp.zip"
+$paths = @(
+  (Join-Path $DataRoot "assets"),
+  (Join-Path $DataRoot "releases"),
+  (Join-Path $DataRoot "projects.json"),
+  (Join-Path $DataRoot "secrets.json"),
+  (Join-Path $DataRoot ".secret-key")
+) | Where-Object { Test-Path $_ }
 if ($paths.Count -gt 0) {
   Compress-Archive -Path $paths -DestinationPath $archive -Force
-  Write-Output "备份完成：$archive"
+  Write-Output "Backup completed: $archive"
 } else {
-  Write-Output "未找到 data\assets 或 data\releases 目录，跳过文件备份。"
+  Write-Output "No DATA_DIR files found; backup skipped."
 }

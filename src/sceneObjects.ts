@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import type { SceneNode } from './types';
+import { buildText3D, textSprite, updateObjectText } from './threeText';
+
+export { updateObjectText };
 
 export function disposeObject(object: THREE.Object3D) {
   object.traverse((child) => {
@@ -15,55 +18,6 @@ export function disposeObject(object: THREE.Object3D) {
       child.material.map?.dispose();
       child.material.dispose();
     }
-  });
-}
-
-function createTextTexture(text: string) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 768;
-  canvas.height = 192;
-  const context = canvas.getContext('2d');
-  if (!context) return new THREE.CanvasTexture(canvas);
-  const content = text.trim();
-  let fontSize = 72;
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  do {
-    context.font = `600 ${fontSize}px sans-serif`;
-    fontSize -= 4;
-  } while (fontSize > 30 && context.measureText(content).width > canvas.width - 52);
-  context.fillStyle = '#f8fafc';
-  context.fillText(content, canvas.width / 2, canvas.height / 2, canvas.width - 52);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
-function textSprite(text: string) {
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: createTextTexture(text),
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-    }),
-  );
-  sprite.position.set(0, 1.4, 0.05);
-  sprite.scale.set(3.2, 0.8, 1);
-  sprite.renderOrder = 10;
-  sprite.userData.dynamicText = true;
-  sprite.userData.text = text;
-  return sprite;
-}
-
-export function updateObjectText(object: THREE.Object3D, text: string) {
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Sprite) || !child.userData.dynamicText) return;
-    if (child.userData.text === text) return;
-    child.userData.text = text;
-    child.material.map?.dispose();
-    child.material.map = createTextTexture(text);
-    child.material.needsUpdate = true;
   });
 }
 
@@ -121,6 +75,10 @@ function group(...items: THREE.Object3D[]) {
 
 export function buildObject(node: SceneNode): THREE.Object3D {
   const color = node.color ?? '#34d399';
+  if (node.kind === 'group') return new THREE.Group();
+  if (node.kind === 'line') return buildLineChart(node);
+  if (node.kind === 'gauge') return buildGauge(node);
+  if (node.kind === 'bar') return buildBar(node);
   if (node.kind === 'sphere')
     return group(mesh(new THREE.SphereGeometry(0.8, 28, 18), color, [0, 0.8, 0], true));
   if (node.kind === 'plane') {
@@ -129,7 +87,6 @@ export function buildObject(node: SceneNode): THREE.Object3D {
     return group(item);
   }
   if (node.kind === 'image') return group(box([2.4, 1.6, 0.04], '#173d3a', [0, 0.8, 0], false));
-  if (node.kind === 'bar') return group(box([0.8, 2, 0.8], color, [0, 1, 0], true));
   if (node.kind === 'building') return buildBuilding(color);
   if (node.kind === 'office') return buildOffice(color);
   if (node.kind === 'factory') return buildFactory(color);
@@ -174,17 +131,35 @@ export function buildObject(node: SceneNode): THREE.Object3D {
   if (node.kind === 'precisionAc') return buildPrecisionAc(color);
   if (node.kind === 'ups') return buildUps(color);
   if (node.kind === 'light') {
-    const light = new THREE.PointLight(color, 3, 16);
-    light.position.y = 1.5;
-    light.add(mesh(new THREE.SphereGeometry(0.18, 12, 8), '#fff7c2', [0, 0, 0]));
-    return group(light);
+    const point = new THREE.PointLight(color, node.intensity ?? 1.4, node.distance ?? 0);
+    point.position.y = 1.5;
+    point.castShadow = false;
+    point.add(mesh(new THREE.SphereGeometry(0.18, 12, 8), '#fff7c2', [0, 0, 0]));
+    return group(point);
   }
-  if (node.kind === 'camera')
-    return group(
-      box([0.7, 0.45, 0.45], color, [0, 0.6, 0], true),
-      cylinder(0.2, 0.3, 0.4, '#253143', [0, 0.6, -0.38]),
+  if (node.kind === 'directionalLight') {
+    const dir = new THREE.DirectionalLight(color, node.intensity ?? 1.2);
+    dir.castShadow = node.castShadow ?? true;
+    const bulb = mesh(new THREE.SphereGeometry(0.22, 14, 10), '#fff3c4', [0, 1.6, 0]);
+    // 方向指示箭头：从发光体指向下前方
+    const stem = cylinder(0.03, 0.03, 0.9, '#ffe08a', [0, 1.05, 0]);
+    const cone = mesh(new THREE.ConeGeometry(0.14, 0.32, 12), '#ffe08a', [0, 0.5, 0]);
+    return group(dir, bulb, stem, cone);
+  }
+  if (node.kind === 'ambientLight') {
+    const ambient = new THREE.AmbientLight(color, node.intensity ?? 0.55);
+    // 环境光没有位置，用线框八面体作为可选中代理体
+    const helper = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.4, 0),
+      new THREE.MeshBasicMaterial({ color: '#cfe8ff', wireframe: true }),
     );
-  if (node.kind === 'text' || node.kind === 'label' || node.kind === 'popup')
+    helper.position.y = 1.2;
+    ambient.add(helper);
+    return group(ambient);
+  }
+  if (node.kind === 'camera') return buildCameraRig(node, color);
+  if (node.kind === 'text') return buildText3D(node);
+  if (node.kind === 'label' || node.kind === 'popup')
     return group(
       box([2.4, 0.6, 0.06], node.kind === 'popup' ? '#1d4ed8' : '#0f766e', [0, 1.4, 0], true),
       textSprite(node.text ?? node.name),
@@ -860,5 +835,129 @@ function buildUps(color: string) {
     for (const x of [-0.52, 0, 0.52])
       root.add(box([0.34, 0.22, 0.05], '#334155', [x, 0.55 + row * 0.28, 0.74]));
   root.add(mesh(new THREE.SphereGeometry(0.07, 10, 8), '#22c55e', [0.7, 2.45, 0.78]));
+  return root;
+}
+
+/** 观察相机组件：机身 + 镜头 + 青色视锥线框，提示其观察方向与范围。 */
+function buildCameraRig(node: SceneNode, color: string) {
+  const root = group(
+    box([0.7, 0.45, 0.45], color, [0, 0.6, 0], true),
+    cylinder(0.2, 0.3, 0.4, '#253143', [0, 0.6, -0.38]),
+  );
+  const near = 0.4;
+  const far = 2.4;
+  const nw = 0.42;
+  const nh = 0.3;
+  const n = [
+    [-nw, -nh],
+    [nw, -nh],
+    [nw, nh],
+    [-nw, nh],
+  ].map(([x, y]) => [x, 0.6 + y, -near] as [number, number, number]);
+  const f = [
+    [-nw * 3, -nh * 3],
+    [nw * 3, -nh * 3],
+    [nw * 3, nh * 3],
+    [-nw * 3, nh * 3],
+  ].map(([x, y]) => [x, 0.6 + y, -far] as [number, number, number]);
+  const points: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    points.push(...n[i], ...n[(i + 1) % 4]);
+    points.push(...f[i], ...f[(i + 1) % 4]);
+    points.push(...n[i], ...f[i]);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+  const frustum = new THREE.LineSegments(
+    geometry,
+    new THREE.LineBasicMaterial({ color: '#7ce5c1', transparent: true, opacity: 0.55 }),
+  );
+  frustum.userData.frustumHelper = true;
+  root.add(frustum);
+  return root;
+}
+
+function normalizeRatio(node: SceneNode, value: number) {
+  const min = node.min ?? 0;
+  const max = node.max ?? 100;
+  return Math.min(1, Math.max(0, (value - min) / Math.max(1e-6, max - min)));
+}
+
+/** 三维柱状图：series 多序列时多柱，否则单柱随 value 变化。 */
+function buildBar(node: SceneNode) {
+  const root = group(box([3.2, 0.08, 1.2], '#263242', [0, 0.04, 0]));
+  const values = node.series?.length ? node.series : [node.value ?? 60];
+  const slot = 2.8 / values.length;
+  values.forEach((value, i) => {
+    const height = 0.16 + normalizeRatio(node, value) * 1.84;
+    const x = -1.4 + slot * (i + 0.5);
+    const column = mesh(
+      new THREE.BoxGeometry(Math.min(0.7, slot * 0.6), height, 0.6),
+      node.color ?? '#34d399',
+      [x, height / 2 + 0.08, 0],
+      true,
+    );
+    column.userData.metricValue = value;
+    root.add(column);
+  });
+  return root;
+}
+
+/** 三维折线图：series 沿 X 轴展开，细管连接，节点用小球标注。 */
+function buildLineChart(node: SceneNode) {
+  const series = node.series?.length ? node.series : [20, 40, 35, 60, 55, 75];
+  const root = group(box([3.2, 0.06, 1.4], '#263242', [0, 0.03, 0]));
+  const min = node.min ?? Math.min(...series);
+  const max = node.max ?? Math.max(...series);
+  const span = Math.max(1e-6, max - min);
+  const points = series.map(
+    (value, i) =>
+      new THREE.Vector3(
+        -1.4 + (series.length === 1 ? 0 : (2.8 * i) / (series.length - 1)),
+        0.18 + ((value - min) / span) * 1.5,
+        0,
+      ),
+  );
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    root.add(
+      beamBetween(
+        [a.x, a.y, a.z],
+        [b.x, b.y, b.z],
+        0.045,
+        node.color ?? '#38d6b2',
+        true,
+      ),
+    );
+  }
+  points.forEach((p) => root.add(mesh(new THREE.SphereGeometry(0.09, 12, 8), '#e6fffa', [p.x, p.y, p.z])));
+  return root;
+}
+
+/** 三维仪表盘：270° 环形刻度 + 值弧 + 指针。 */
+function buildGauge(node: SceneNode) {
+  const root = group();
+  const ratio = normalizeRatio(node, node.value ?? 60);
+  const start = -Math.PI / 4;
+  const sweep = Math.PI * 1.5;
+  const background = mesh(new THREE.TorusGeometry(1, 0.09, 10, 48, sweep), '#334457', [0, 1.1, 0]);
+  background.rotation.z = start;
+  const valueArc = mesh(
+    new THREE.TorusGeometry(1, 0.09, 10, 48, Math.max(0.001, sweep * ratio)),
+    node.color ?? '#38d6b2',
+    [0, 1.1, 0.02],
+    true,
+  );
+  valueArc.rotation.z = start;
+  const needle = box([0.85, 0.05, 0.05], '#e2e8f0', [0.4, 1.1, 0.05]);
+  needle.geometry.translate(0.4, 0, 0);
+  needle.position.set(0, 1.1, 0.05);
+  needle.rotation.z = start + sweep * ratio;
+  root.add(background, valueArc, needle, mesh(new THREE.SphereGeometry(0.12, 14, 10), '#1e293b', [0, 1.1, 0.06]));
+  const label = textSprite(String(node.value ?? ''));
+  label.position.set(0, 0.15, 0.05);
+  label.scale.set(1.1, 0.28, 1);
+  root.add(label);
   return root;
 }

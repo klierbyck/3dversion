@@ -8,9 +8,13 @@ import type {
   SceneTimelineProperty,
 } from './types';
 
+export const TIMELINE_SPEEDS = [0.25, 0.5, 1, 2] as const;
+export type TimelineSpeed = (typeof TIMELINE_SPEEDS)[number];
+
 export const defaultTimeline: SceneTimeline = {
   duration: 15,
   loop: false,
+  speed: 1,
   keyframes: [],
   cameraKeyframes: [],
 };
@@ -23,9 +27,13 @@ export function normalizeTimeline(timeline?: SceneTimeline): SceneTimeline {
     MAX_TIMELINE_DURATION_SECONDS,
     Math.max(1, Number(timeline?.duration) || 15),
   );
+  const speed = (TIMELINE_SPEEDS as readonly number[]).includes(timeline?.speed ?? 1)
+    ? (timeline?.speed as TimelineSpeed)
+    : 1;
   return {
     duration,
     loop: timeline?.loop ?? false,
+    speed,
     keyframes: (timeline?.keyframes ?? [])
       .filter(isKeyframe)
       .map((frame) => ({ ...frame, time: clamp(frame.time, 0, duration) }))

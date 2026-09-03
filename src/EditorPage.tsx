@@ -19,7 +19,6 @@ import {
   Grid3X3,
   History,
   Axis3d,
-  Globe,
   MousePointer2,
   Package,
   Pause,
@@ -85,6 +84,7 @@ import { BottomPanel } from './editor/BottomPanel';
 import { CategoryScroller, Tree } from './editor/EditorSidebar';
 import { EventRuleList } from './editor/EventRuleList';
 import { DataSourcePanel, Inspector } from './editor/InspectorPanels';
+import { DeleteNodesDialog } from './editor/DeleteNodesDialog';
 import { ReleaseDrawer } from './editor/ReleaseDrawer';
 import { PublishDialog } from './editor/PublishDialog';
 import { validateSceneForPublish, type PublishIssue } from './publishCheck';
@@ -97,7 +97,12 @@ import {
   normalizeTimeline,
   propertyValue,
 } from './timeline';
-import { applySubtreeToggle, normalizeSingleSelection } from './lib/sceneTree';
+import {
+  applySubtreeToggle,
+  moveSceneNode,
+  normalizeSingleSelection,
+  type SceneNodeDropPosition,
+} from './lib/sceneTree';
 
 type Props = { project: ProjectMeta; onExit: () => void };
 
@@ -166,6 +171,12 @@ export default function EditorPage({ project, onExit }: Props) {
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dataSourceStatus, setDataSourceStatus] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    ids: string[];
+    nodeCount: number;
+    childCount: number;
+    groupCount: number;
+  } | null>(null);
 
   // 场景的最新值以 ref 为准：所有变更先算出 next 再统一写入，
   // 避免 StrictMode 双调用 setState updater 时把撤销快照重复入栈。
@@ -186,7 +197,10 @@ export default function EditorPage({ project, onExit }: Props) {
   const eventCount = objectEvents.length;
   const timeline = useMemo(() => normalizeTimeline(scene.timeline), [scene.timeline]);
   const canvasNodes = useMemo(() => applyTimeline(scene, timelineTime), [scene, timelineTime]);
-  const cameraView = useMemo(() => applyCameraTimeline(scene, timelineTime), [scene, timelineTime]);
+  const cameraView = useMemo(
+    () => applyCameraTimeline(scene, timelineTime),
+    [scene.timeline, timelineTime],
+  );
   const filtered = useMemo(
     () =>
       componentCatalog.filter(
@@ -360,37 +374,22 @@ export default function EditorPage({ project, onExit }: Props) {
     });
   }, []);
 
-  /** 场景树拖拽改父：禁止拖入自身子树。 */
-  const reparentNode = useCallback(
-    (id: string, newParentId: string | null) => {
-      if (id === newParentId) return;
-      if (newParentId) {
-        const descendants = new Set<string>([id]);
-        let changed = true;
-        while (changed) {
-          changed = false;
-          sceneRef.current.nodes.forEach((node) => {
-            if (node.parentId && descendants.has(node.parentId) && !descendants.has(node.id)) {
-              descendants.add(node.id);
-              changed = true;
-            }
-          });
-        }
-        if (descendants.has(newParentId)) {
-          showToast('不能把对象移动到它自己的子级中');
-          return;
-        }
+  /** 场景树拖拽：同级排序、移入分组或移回根级。 */
+  const moveNode = useCallback(
+    (id: string, targetId: string | null, position: SceneNodeDropPosition) => {
+      const nextNodes = moveSceneNode(sceneRef.current.nodes, id, targetId, position);
+      if (nextNodes === sceneRef.current.nodes) {
+        showToast('不能把对象移动到它自己的子级中');
+        return;
       }
       updateScene((current) => ({
         ...current,
-        nodes: current.nodes.map((node) =>
-          node.id === id ? { ...node, parentId: newParentId } : node,
-        ),
+        nodes: moveSceneNode(current.nodes, id, targetId, position),
       }));
-      if (newParentId)
+      if (targetId && position === 'inside')
         setCollapsedIds((prev) => {
           const next = new Set(prev);
-          next.delete(newParentId);
+          next.delete(targetId);
           return next;
         });
     },
@@ -446,61 +445,64 @@ export default function EditorPage({ project, onExit }: Props) {
     return removed;
   };
 
-  /** 批量删除：锁定拦截、含子节点二次确认、级联清理事件引用。 */
+  /** 执行删除并级联清理事件引用；确认交互由 deleteNodes 统一处理。 */
+  const removeNodes = useCallback(
+    (ids: string[]) => {
+      updateScene((next) => {
+        const removed = collectSubtree(next.nodes, ids);
+        return {
+          ...next,
+          nodes: next.nodes.filter((node) => !removed.has(node.id)),
+          events: (next.events ?? [])
+            .map((rule) => ({
+              ...rule,
+              ownerNodeId:
+                getEventScope(rule) === 'node' && rule.ownerNodeId && removed.has(rule.ownerNodeId)
+                  ? null
+                  : rule.ownerNodeId,
+              trigger: {
+                ...rule.trigger,
+                nodeId:
+                  rule.trigger.nodeId && removed.has(rule.trigger.nodeId)
+                    ? null
+                    : rule.trigger.nodeId,
+              },
+              actions: rule.actions.filter(
+                (action) => !action.targetId || !removed.has(action.targetId),
+              ),
+            }))
+            .filter(
+              (rule) =>
+                rule.actions.length > 0 &&
+                (getEventScope(rule) === 'scene' || getEventOwnerId(rule) !== null),
+            ),
+        };
+      });
+      setSelectedId(null);
+      setSelectedIds([]);
+    },
+    [updateScene],
+  );
+
+  /** 批量删除：锁定拦截，其余节点统一使用应用内二次确认。 */
   const deleteNodes = useCallback(
     (idsInput: string[]) => {
-      const ids = idsInput.filter(Boolean);
+      const ids = Array.from(new Set(idsInput.filter(Boolean)));
       if (!ids.length) return;
       const current = sceneRef.current;
-      const lockedNode = ids
-        .map((id) => current.nodes.find((node) => node.id === id))
-        .find((node) => node?.locked);
+      const removed = collectSubtree(current.nodes, ids);
+      const removedNodes = current.nodes.filter((node) => removed.has(node.id));
+      const lockedNode = removedNodes.find((node) => node.locked);
       if (lockedNode) {
         showToast(`「${lockedNode.name}」已锁定，请先解除锁定再删除`);
         return;
       }
-      const removed = collectSubtree(current.nodes, ids);
-      const childCount = removed.size - ids.length;
-      const directParent = ids.some((id) => current.nodes.some((node) => node.parentId === id));
-      if (childCount > 0 || directParent) {
-        const ok = window.confirm(
-          `选中对象包含 ${childCount} 个子节点，删除后将一并移除（可用撤销恢复）。是否继续？`,
-        );
-        if (!ok) return;
-      }
-      updateScene((next) => ({
-        ...next,
-        nodes: next.nodes.filter((node) => !removed.has(node.id)),
-        events: (next.events ?? [])
-          .map((rule) => ({
-            ...rule,
-            ownerNodeId:
-              getEventScope(rule) === 'node' &&
-              rule.ownerNodeId &&
-              removed.has(rule.ownerNodeId)
-                ? null
-                : rule.ownerNodeId,
-            trigger: {
-              ...rule.trigger,
-              nodeId:
-                rule.trigger.nodeId && removed.has(rule.trigger.nodeId)
-                  ? null
-                  : rule.trigger.nodeId,
-            },
-            actions: rule.actions.filter(
-              (action) => !action.targetId || !removed.has(action.targetId),
-            ),
-          }))
-          .filter(
-            (rule) =>
-              rule.actions.length > 0 &&
-              (getEventScope(rule) === 'scene' || getEventOwnerId(rule) !== null),
-          ),
-      }));
-      setSelectedId(null);
-      setSelectedIds([]);
+
+      const childCount = Math.max(0, removed.size - ids.length);
+      const groupCount = removedNodes.filter((node) => node.kind === 'group').length;
+      setPendingDelete({ ids, nodeCount: removed.size, childCount, groupCount });
     },
-    [showToast, updateScene],
+    [showToast],
   );
 
   /** 新建一个空分组，随后可把其它节点拖入分组。 */
@@ -509,7 +511,7 @@ export default function EditorPage({ project, onExit }: Props) {
     group.name = '分组';
     updateScene((current) => ({
       ...current,
-      nodes: [...current.nodes, group],
+      nodes: [group, ...current.nodes],
     }));
     setSelectedId(group.id);
     setSelectedIds([group.id]);
@@ -1283,9 +1285,11 @@ export default function EditorPage({ project, onExit }: Props) {
       </header>
       <main
         className={`editor-body${leftPanelCollapsed ? ' left-panel-collapsed' : ''}${rightPanelCollapsed ? ' right-panel-collapsed' : ''}`}
-        style={{
-          '--right-panel-width': `${rightPanelCollapsed ? 0 : rightPanelWidth}px`,
-        } as CSSProperties}
+        style={
+          {
+            '--right-panel-width': `${rightPanelCollapsed ? 0 : rightPanelWidth}px`,
+          } as CSSProperties
+        }
       >
         <aside className={`left-panel${leftPanelCollapsed ? ' collapsed' : ''}`}>
           <button
@@ -1380,17 +1384,18 @@ export default function EditorPage({ project, onExit }: Props) {
               {assets.length ? (
                 <div className="asset-list">
                   {assets.map((asset) => (
-                    <div
-                      className="asset-card"
-                      key={asset.id}
-                    >
+                    <div className="asset-card" key={asset.id}>
                       <button
                         className="asset-add-button"
                         onClick={() => addAssetNode(asset)}
                         title="点击添加到场景"
                       >
                         <span className="asset-preview" aria-hidden="true">
-                          {asset.kind === 'image' ? <img src={asset.url} alt="" /> : <span>3D</span>}
+                          {asset.kind === 'image' ? (
+                            <img src={asset.url} alt="" />
+                          ) : (
+                            <span>3D</span>
+                          )}
                         </span>
                         <span className="asset-copy">
                           <strong>{asset.name}</strong>
@@ -1419,19 +1424,19 @@ export default function EditorPage({ project, onExit }: Props) {
             </div>
           )}
           <div className="panel-section-title">
-            <span>场景树</span>
-            <span className="tree-title-tools">
+            <span className="tree-title-label">
+              场景树
               <span className="tree-count">{scene.nodes.length}</span>
-              <button
-                type="button"
-                className="add-group-button"
-                title="新建空分组，可把对象拖入分组统一管理"
-                onClick={addGroup}
-              >
-                <FolderPlus size={13} />
-                添加分组
-              </button>
             </span>
+            <button
+              type="button"
+              className="compact-add-button"
+              title="新建空分组，可把对象拖入分组统一管理"
+              onClick={addGroup}
+            >
+              <FolderPlus size={13} />
+              添加分组
+            </button>
           </div>
           <div
             className="scene-tree"
@@ -1440,7 +1445,7 @@ export default function EditorPage({ project, onExit }: Props) {
             }}
             onDrop={(event) => {
               const dragId = event.dataTransfer.getData('tree-node');
-              if (dragId) reparentNode(dragId, null);
+              if (dragId) moveNode(dragId, null, 'inside');
             }}
           >
             <Tree
@@ -1461,7 +1466,7 @@ export default function EditorPage({ project, onExit }: Props) {
                 })
               }
               onRename={renameNode}
-              onReparent={reparentNode}
+              onMove={moveNode}
               onFocus={focusNode}
               iconFor={iconFor}
             />
@@ -1510,16 +1515,16 @@ export default function EditorPage({ project, onExit }: Props) {
                 <Axis3d size={14} />
                 坐标轴
               </button>
-              <button
-                className={coordinateSpace === 'local' ? 'active' : ''}
-                onClick={() =>
-                  setCoordinateSpace((space) => (space === 'world' ? 'local' : 'world'))
-                }
+              <select
+                className="view-select coordinate-space-select"
+                value={coordinateSpace}
+                onChange={(event) => setCoordinateSpace(event.target.value as CoordinateSpace)}
                 title="切换 Gizmo 的世界/局部坐标空间"
+                aria-label="坐标空间"
               >
-                <Globe size={14} />
-                {coordinateSpace === 'world' ? '世界' : '局部'}
-              </button>
+                <option value="world">世界</option>
+                <option value="local">局部</option>
+              </select>
               <select
                 className="view-select"
                 value={viewPreset}
@@ -1535,12 +1540,6 @@ export default function EditorPage({ project, onExit }: Props) {
                 <option value="top">顶视图</option>
                 <option value="bottom">底视图</option>
               </select>
-              <button
-                onClick={() => setViewPreset('perspective')}
-                title="重置为默认透视视角"
-              >
-                重置视角
-              </button>
             </div>
             <div className="canvas-status">
               <span>节点 {scene.nodes.length}</span>
@@ -1630,9 +1629,7 @@ export default function EditorPage({ project, onExit }: Props) {
             />
           )}
         </section>
-        <aside
-          className={`right-panel${rightPanelCollapsed ? ' collapsed' : ''}`}
-        >
+        <aside className={`right-panel${rightPanelCollapsed ? ' collapsed' : ''}`}>
           <div
             className="panel-resize-handle"
             role="separator"
@@ -1657,7 +1654,10 @@ export default function EditorPage({ project, onExit }: Props) {
             <ChevronLeft size={16} />
           </button>
           <div className="right-panel-head">
-            <h2>{selected ? selected.name : '未选择对象'}</h2>
+            <div className="right-panel-title">
+              <h2>{selected ? selected.name : '未选择对象'}</h2>
+              {selected && <span className="right-panel-kind">组件类型：{selected.kind}</span>}
+            </div>
           </div>
           {selected ? (
             <>
@@ -1753,6 +1753,18 @@ export default function EditorPage({ project, onExit }: Props) {
           nodeCount={scene.nodes.length}
           onCancel={() => setPublishIssues(null)}
           onConfirm={(notes) => void handlePublish(notes)}
+        />
+      )}
+      {pendingDelete && (
+        <DeleteNodesDialog
+          nodeCount={pendingDelete.nodeCount}
+          childCount={pendingDelete.childCount}
+          groupCount={pendingDelete.groupCount}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            removeNodes(pendingDelete.ids);
+            setPendingDelete(null);
+          }}
         />
       )}
       {toast && (

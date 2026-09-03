@@ -4,6 +4,7 @@ import {
   applySubtreeToggle,
   collectSubtreeIds,
   isNodeInSubtree,
+  moveSceneNode,
   normalizeSingleSelection,
 } from '../src/lib/sceneTree';
 
@@ -107,5 +108,43 @@ describe('normalizeSingleSelection 单选归一（已取消 Ctrl 加选）', () 
 
   it('null 时清空选择', () => {
     expect(normalizeSingleSelection(null)).toEqual({ selectedId: null, selectedIds: [] });
+  });
+});
+
+describe('moveSceneNode 场景树拖拽', () => {
+  it('可在同级节点前后调整顺序', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')];
+    expect(moveSceneNode(nodes, 'c', 'a', 'before').map((node) => node.id)).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+    expect(moveSceneNode(nodes, 'a', 'b', 'after').map((node) => node.id)).toEqual([
+      'b',
+      'a',
+      'c',
+    ]);
+  });
+
+  it('可移入分组并追加到分组子节点末尾', () => {
+    const nodes = [makeNode('g', 'group'), makeNode('a', 'box', 'g'), makeNode('b')];
+    const next = moveSceneNode(nodes, 'b', 'g', 'inside');
+    expect(next.find((node) => node.id === 'b')?.parentId).toBe('g');
+    expect(next.filter((node) => node.parentId === 'g').map((node) => node.id)).toEqual([
+      'a',
+      'b',
+    ]);
+  });
+
+  it('不可移入普通组件或自身子树', () => {
+    const nodes = buildTree();
+    expect(moveSceneNode(nodes, 'd', 'a', 'inside')).toBe(nodes);
+    expect(moveSceneNode(nodes, 'g', 'b', 'after')).toBe(nodes);
+  });
+
+  it('拖到场景树空白处会移回根级末尾', () => {
+    const nodes = buildTree();
+    const next = moveSceneNode(nodes, 'a', null, 'inside');
+    expect(next.at(-1)).toMatchObject({ id: 'a', parentId: null });
   });
 });

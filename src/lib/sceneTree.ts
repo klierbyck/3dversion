@@ -28,6 +28,42 @@ export function isNodeInSubtree(
   return collectSubtreeIds(nodes, rootId).includes(maybeDescendant);
 }
 
+export type SceneNodeDropPosition = 'before' | 'inside' | 'after';
+
+/**
+ * 按场景树拖放结果移动节点：节点行前后用于排序，分组行内部用于收纳子节点。
+ * targetId 为 null 时把节点移动到根级末尾。
+ */
+export function moveSceneNode(
+  nodes: SceneNode[],
+  nodeId: string,
+  targetId: string | null,
+  position: SceneNodeDropPosition,
+): SceneNode[] {
+  const moving = nodes.find((node) => node.id === nodeId);
+  if (!moving) return nodes;
+
+  if (targetId === null) {
+    const remaining = nodes.filter((node) => node.id !== nodeId);
+    return [...remaining, { ...moving, parentId: null }];
+  }
+
+  const target = nodes.find((node) => node.id === targetId);
+  if (!target || isNodeInSubtree(nodes, nodeId, targetId)) return nodes;
+  if (position === 'inside' && target.kind !== 'group') return nodes;
+
+  const nextParentId = position === 'inside' ? target.id : target.parentId;
+  const moved = { ...moving, parentId: nextParentId };
+  const remaining = nodes.filter((node) => node.id !== nodeId);
+
+  if (position === 'inside') return [...remaining, moved];
+
+  const targetIndex = remaining.findIndex((node) => node.id === targetId);
+  if (targetIndex < 0) return nodes;
+  const insertAt = position === 'after' ? targetIndex + 1 : targetIndex;
+  return [...remaining.slice(0, insertAt), moved, ...remaining.slice(insertAt)];
+}
+
 /**
  * 整体切换某个可级联字段（visible / locked）。
  * - 分组节点（kind === 'group'）：自身与全部后代一起被设置为目标值；

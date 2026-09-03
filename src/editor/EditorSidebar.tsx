@@ -9,6 +9,7 @@ import {
   LockOpen,
 } from 'lucide-react';
 import type { NodeKind, SceneNode } from '../types';
+import type { SceneNodeDropPosition } from '../lib/sceneTree';
 
 /** 组件分类横向滚动条：两端箭头按钮滚动，滚动到边界时对应箭头置灰。 */
 export function CategoryScroller({
@@ -77,16 +78,6 @@ export function CategoryScroller({
   );
 }
 
-/** nodeId 是否为 ancestorId 的后代（用于禁止把节点拖进自己的子树）。 */
-function isDescendant(nodes: SceneNode[], ancestorId: string, nodeId: string): boolean {
-  let current = nodes.find((item) => item.id === nodeId);
-  while (current?.parentId) {
-    if (current.parentId === ancestorId) return true;
-    current = nodes.find((item) => item.id === current?.parentId);
-  }
-  return false;
-}
-
 type TreeProps = {
   nodes: SceneNode[];
   parentId: string | null;
@@ -99,7 +90,11 @@ type TreeProps = {
   onToggleLocked: (id: string) => void;
   onToggleCollapsed: (id: string) => void;
   onRename: (id: string, name: string) => void;
-  onReparent: (id: string, newParentId: string | null) => void;
+  onMove: (
+    id: string,
+    targetId: string | null,
+    position: SceneNodeDropPosition,
+  ) => void;
   onFocus: (id: string) => void;
   iconFor: (kind: NodeKind) => ReactNode;
 };
@@ -133,13 +128,13 @@ function TreeRow({
   onToggleLocked,
   onToggleCollapsed,
   onRename,
-  onReparent,
+  onMove,
   onFocus,
   iconFor,
 }: TreeProps & { node: SceneNode; hasChildren: boolean }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(node.name);
-  const [dropOver, setDropOver] = useState(false);
+  const [dropPosition, setDropPosition] = useState<SceneNodeDropPosition | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const collapsed = collapsedIds.has(node.id);
   const isSelected = selectedIds.includes(node.id);
@@ -160,7 +155,7 @@ function TreeRow({
   return (
     <div>
       <div
-        className={`tree-row ${isSelected ? 'selected' : ''} ${selectedId === node.id ? 'primary' : ''} ${dropOver ? 'drop-over' : ''}`}
+        className={`tree-row ${isSelected ? 'selected' : ''} ${selectedId === node.id ? 'primary' : ''} ${dropPosition ? `drop-${dropPosition}` : ''}`}
         data-node-id={node.id}
         draggable={!editing}
         onDragStart={(event) => {
@@ -168,19 +163,30 @@ function TreeRow({
           event.dataTransfer.setData('tree-node', node.id);
         }}
         onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes('tree-node')) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = 'move';
-          if (!dropOver) setDropOver(true);
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const ratio = (event.clientY - bounds.top) / bounds.height;
+          const nextPosition: SceneNodeDropPosition =
+            node.kind === 'group' && ratio >= 0.25 && ratio <= 0.75
+              ? 'inside'
+              : ratio < 0.5
+                ? 'before'
+                : 'after';
+          if (dropPosition !== nextPosition) setDropPosition(nextPosition);
         }}
-        onDragLeave={() => setDropOver(false)}
+        onDragLeave={() => setDropPosition(null)}
         onDrop={(event) => {
           event.preventDefault();
-          setDropOver(false);
+          event.stopPropagation();
+          const position = dropPosition;
+          setDropPosition(null);
           const dragId = event.dataTransfer.getData('tree-node');
-          if (!dragId || dragId === node.id) return;
-          if (isDescendant(nodes, node.id, dragId)) return;
-          onReparent(dragId, node.id);
+          if (!dragId || dragId === node.id || !position) return;
+          onMove(dragId, node.id, position);
         }}
+        onDragEnd={() => setDropPosition(null)}
       >
         {hasChildren ? (
           <button
@@ -260,7 +266,7 @@ function TreeRow({
           onToggleLocked={onToggleLocked}
           onToggleCollapsed={onToggleCollapsed}
           onRename={onRename}
-          onReparent={onReparent}
+          onMove={onMove}
           onFocus={onFocus}
           iconFor={iconFor}
         />

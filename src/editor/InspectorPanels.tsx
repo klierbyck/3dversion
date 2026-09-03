@@ -21,7 +21,10 @@ export function Inspector({
   nodes: SceneNode[];
   setNode: (patch: Partial<SceneNode>) => void;
 }) {
-  const fields = useMemo(() => getFieldsForKind(selected.kind), [selected.kind]);
+  const fields = useMemo(
+    () => getFieldsForKind(selected.kind).filter((field) => field.key !== 'parentId'),
+    [selected.kind],
+  );
   const errors = useMemo(() => validateNode(selected), [selected]);
   const labelOf = (path: string) =>
     fields.find((field) => field.key === path)?.label ?? path;
@@ -37,7 +40,6 @@ export function Inspector({
 
   return (
     <div className="inspector-body">
-      <div className="inspector-kind-tag">组件类型：{selected.kind}</div>
       <SchemaForm fields={fields} node={selected} nodes={nodes} onPatch={handlePatch} />
       {Object.keys(errors).length > 0 && (
         <div className="inspector-error-summary" role="alert">

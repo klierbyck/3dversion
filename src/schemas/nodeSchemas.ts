@@ -18,7 +18,16 @@ export type FieldWidget =
   | 'vector3'
   | 'tags';
 
-export type FieldSection = '通用' | '变换' | '外观' | '文字' | '灯光' | '相机' | '图表' | '动画';
+export type FieldSection =
+  | '通用'
+  | 'GIS'
+  | '变换'
+  | '外观'
+  | '文字'
+  | '灯光'
+  | '相机'
+  | '图表'
+  | '动画';
 
 export type FieldOption = { label: string; value: string | number };
 
@@ -37,6 +46,8 @@ export type FieldDescriptor = {
   optionsFrom?: 'parentNodes';
   placeholder?: string;
   help?: string;
+  rows?: number;
+  code?: boolean;
 };
 
 const numberSchema = (minimum?: number, maximum?: number) => ({
@@ -176,6 +187,105 @@ const F = {
     section: '文字',
     schema: { type: 'boolean' },
   }),
+  gisLongitude: (): FieldDescriptor => ({
+    key: 'gisLongitude',
+    label: '中心经度',
+    widget: 'number',
+    section: 'GIS',
+    schema: numberSchema(-180, 180),
+    step: 0.000001,
+    unit: '°',
+  }),
+  gisLatitude: (): FieldDescriptor => ({
+    key: 'gisLatitude',
+    label: '中心纬度',
+    widget: 'number',
+    section: 'GIS',
+    schema: numberSchema(-85, 85),
+    step: 0.000001,
+    unit: '°',
+  }),
+  gisRange: (): FieldDescriptor => ({
+    key: 'gisRange',
+    label: '显示范围',
+    widget: 'number',
+    section: 'GIS',
+    schema: numberSchema(10, 10000000),
+    step: 10,
+    unit: 'm',
+    help: '地图横向覆盖的实际距离',
+  }),
+  gisMapStyle: (): FieldDescriptor => ({
+    key: 'gisMapStyle',
+    label: '地图风格',
+    widget: 'select',
+    section: 'GIS',
+    schema: { enum: ['dark', 'light', 'blue'] },
+    options: [
+      { label: '深色', value: 'dark' },
+      { label: '浅色', value: 'light' },
+      { label: '蓝图', value: 'blue' },
+    ],
+  }),
+  gisShowGrid: (): FieldDescriptor => ({
+    key: 'gisShowGrid',
+    label: '显示经纬网格',
+    widget: 'boolean',
+    section: 'GIS',
+    schema: { type: 'boolean' },
+  }),
+  gisShowBasemap: (): FieldDescriptor => ({
+    key: 'gisShowBasemap',
+    label: '显示底图',
+    widget: 'boolean',
+    section: 'GIS',
+    schema: { type: 'boolean' },
+  }),
+  gisTileUrl: (): FieldDescriptor => ({
+    key: 'gisTileUrl',
+    label: 'XYZ 瓦片地址',
+    widget: 'text',
+    section: 'GIS',
+    schema: { type: 'string', maxLength: 500 },
+    placeholder: 'https://.../{z}/{x}/{y}.png',
+    help: '留空使用离线网格底图',
+  }),
+  gisZoom: (): FieldDescriptor => ({
+    key: 'gisZoom',
+    label: '最大瓦片级别',
+    widget: 'number',
+    section: 'GIS',
+    schema: numberSchema(0, 19),
+    step: 1,
+    help: '大范围地图会自动降低级别以控制瓦片数量',
+  }),
+  gisAttribution: (): FieldDescriptor => ({
+    key: 'gisAttribution',
+    label: '数据来源署名',
+    widget: 'text',
+    section: 'GIS',
+    schema: { type: 'string', maxLength: 200 },
+  }),
+  gisOverlayHeight: (): FieldDescriptor => ({
+    key: 'gisOverlayHeight',
+    label: '图层高度',
+    widget: 'number',
+    section: 'GIS',
+    schema: numberSchema(0, 100),
+    step: 0.02,
+    unit: 'm',
+  }),
+  gisGeoJson: (): FieldDescriptor => ({
+    key: 'gisGeoJson',
+    label: 'GeoJSON',
+    widget: 'textarea',
+    section: 'GIS',
+    schema: { type: 'string', maxLength: 100000 },
+    placeholder: '{"type":"FeatureCollection","features":[]}',
+    help: '支持 Point、LineString、Polygon 及对应 Multi 类型',
+    rows: 7,
+    code: true,
+  }),
   intensity: (): FieldDescriptor => ({
     key: 'intensity',
     label: '强度',
@@ -291,6 +401,22 @@ const COMMON = [F.name(), F.parent(), F.businessId(), F.tags()];
 
 const KIND_FIELDS: Partial<Record<NodeKind, FieldDescriptor[]>> = {
   group: [...COMMON, ...TRANSFORM, F.visible(), F.locked()],
+  gisMap: [
+    ...COMMON,
+    F.gisLongitude(),
+    F.gisLatitude(),
+    F.gisRange(),
+    F.gisMapStyle(),
+    F.gisShowBasemap(),
+    F.gisShowGrid(),
+    F.gisTileUrl(),
+    F.gisZoom(),
+    F.gisAttribution(),
+    F.gisOverlayHeight(),
+    F.gisGeoJson(),
+    ...TRANSFORM,
+    ...APPEARANCE,
+  ],
   box: [...COMMON, ...TRANSFORM, ...APPEARANCE],
   sphere: [...COMMON, ...TRANSFORM, ...APPEARANCE],
   plane: [...COMMON, ...TRANSFORM, ...APPEARANCE],
@@ -350,6 +476,7 @@ export function getFieldsForKind(kind: NodeKind): FieldDescriptor[] {
 
 export const FIELD_SECTION_ORDER: FieldSection[] = [
   '通用',
+  'GIS',
   '变换',
   '外观',
   '文字',

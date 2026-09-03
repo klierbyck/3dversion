@@ -1,6 +1,7 @@
 import Ajv, { type ErrorObject } from 'ajv';
 import type { SceneNode } from '../types';
 import { getFieldsForKind, type FieldDescriptor } from './nodeSchemas';
+import { parseGeoJson } from '../lib/gis';
 
 // ajv 严格模式关闭：schema 中含 x-ui 等扩展关键字；只做数据校验。
 const ajv = new Ajv({ strict: false, allErrors: true });
@@ -88,6 +89,13 @@ export function validateNode(node: SceneNode): Record<string, string> {
   // 仪表/柱图量程
   if ((node.kind === 'gauge' || node.kind === 'bar') && node.min !== undefined && node.max !== undefined && node.min >= node.max) {
     errors.max = '量程上限必须大于下限';
+  }
+  if (node.kind === 'gisMap') {
+    const geoJsonError = parseGeoJson(node.gisGeoJson).error;
+    if (geoJsonError) errors.gisGeoJson = geoJsonError;
+    if (node.gisTileUrl && !['{z}', '{x}', '{y}'].every((token) => node.gisTileUrl!.includes(token))) {
+      errors.gisTileUrl = '瓦片地址必须包含 {z}、{x}、{y}';
+    }
   }
   return errors;
 }

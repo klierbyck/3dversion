@@ -475,13 +475,22 @@ export default function SceneCanvas({
         child.receiveShadow = true;
         if (child.userData.tintable && child.material instanceof THREE.MeshStandardMaterial) {
           child.material.color.set(effectiveColor ?? '#34d399');
-          child.material.opacity = effectiveOpacity ?? 1;
-          child.material.transparent = (effectiveOpacity ?? 1) < 1;
+          const opacity = (effectiveOpacity ?? 1) * (child.userData.baseOpacity ?? 1);
+          child.material.opacity = opacity;
+          child.material.transparent = opacity < 1;
         }
         if (node.kind === 'image' && child.material instanceof THREE.MeshBasicMaterial) {
           child.material.color.set(effectiveColor ?? '#ffffff');
           child.material.opacity = effectiveOpacity ?? 1;
           child.material.transparent = true;
+        }
+        if (
+          node.kind === 'gisMap' &&
+          child.userData.gisBasemap &&
+          child.material instanceof THREE.MeshBasicMaterial
+        ) {
+          child.material.opacity = effectiveOpacity ?? 1;
+          child.material.transparent = (effectiveOpacity ?? 1) < 1;
         }
       });
       // 灯光参数实时同步

@@ -27,6 +27,22 @@ describe('node schema descriptors', () => {
     ['gauge', ['value', 'min', 'max']],
     ['line', ['series', 'min', 'max']],
     ['model', ['animation.autoplay', 'animation.clip']],
+    [
+      'gisMap',
+      [
+        'gisLongitude',
+        'gisLatitude',
+        'gisRange',
+        'gisMapStyle',
+        'gisShowBasemap',
+        'gisShowGrid',
+        'gisTileUrl',
+        'gisZoom',
+        'gisAttribution',
+        'gisOverlayHeight',
+        'gisGeoJson',
+      ],
+    ],
   ] as const)('exposes specialized fields for %s', (kind, expected) => {
     expect(fieldKeys(kind)).toEqual(expect.arrayContaining([...expected]));
   });

@@ -131,6 +131,7 @@ const componentCategories = [
   '展陈',
   '机房',
   '数据',
+  'GIS',
   '系统',
 ];
 
@@ -1590,10 +1591,8 @@ export default function EditorPage({ project, onExit }: Props) {
               onRuntimeError={logError}
             />
             <div className="canvas-help">
-              <span>拖拽组件到画布（优先落在模型表面）</span>
-              <span>Shift 拖拽框选 · 单击选中对象</span>
-              <span>右键旋转视角 · 滚轮缩放</span>
-              <span>双击场景树节点可重命名</span>
+              拖拽组件到画布 • 单击选中对象 • 右键旋转视角 • 滚轮缩放 •
+              双击场景树节点或分组可重命名
             </div>
             <div className="axis-widget">
               <span className="axis-x">X</span>

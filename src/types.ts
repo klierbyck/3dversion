@@ -3,6 +3,7 @@ export type NodeKind =
   | 'box'
   | 'sphere'
   | 'plane'
+  | 'gisMap'
   | 'image'
   | 'model'
   | 'text'
@@ -72,6 +73,7 @@ export type NodeAnimation = {
 };
 
 export type CameraProjection = 'perspective' | 'orthographic';
+export type GisMapStyle = 'dark' | 'light' | 'blue';
 
 export type SceneNode = {
   id: string;
@@ -108,6 +110,20 @@ export type SceneNode = {
   extrudeDepth?: number;
   /** true：始终面向相机；false：固定朝向的立体文字。 */
   billboard?: boolean;
+  // 轻量 GIS 平面地图属性
+  gisLongitude?: number;
+  gisLatitude?: number;
+  /** 地图平面横向覆盖的实际距离。 */
+  gisRange?: number;
+  gisMapStyle?: GisMapStyle;
+  /** false 时仅渲染 GeoJSON，用于叠加多个独立动画图层。 */
+  gisShowBasemap?: boolean;
+  gisShowGrid?: boolean;
+  gisTileUrl?: string;
+  gisZoom?: number;
+  gisAttribution?: string;
+  gisGeoJson?: string;
+  gisOverlayHeight?: number;
   // 图表属性
   /** 折线图序列（柱图用 value，折线图用 series）。 */
   series?: number[];
@@ -358,6 +374,7 @@ export type ComponentMeta = {
     | '展陈'
     | '机房'
     | '数据'
+    | 'GIS'
     | '系统';
   icon: string;
   description: string;
@@ -365,6 +382,14 @@ export type ComponentMeta = {
 };
 
 export const componentCatalog: ComponentMeta[] = [
+  {
+    kind: 'gisMap',
+    label: 'GIS 地图',
+    category: 'GIS',
+    icon: '⌖',
+    description: '经纬度底图与 GeoJSON 图层',
+    color: '#35d0b1',
+  },
   {
     kind: 'box',
     label: '立方体',
@@ -868,6 +893,45 @@ export function createNode(
     base.fontSize = 0.6;
     base.extrudeDepth = 0.12;
     base.billboard = false;
+  }
+  if (kind === 'gisMap') {
+    base.position = position ?? [0, 0, 0];
+    base.gisLongitude = 121.4737;
+    base.gisLatitude = 31.2304;
+    base.gisRange = 1200;
+    base.gisMapStyle = 'dark';
+    base.gisShowBasemap = true;
+    base.gisShowGrid = true;
+    base.gisTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    base.gisZoom = 15;
+    base.gisAttribution = '© OpenStreetMap contributors';
+    base.gisOverlayHeight = 0.12;
+    base.gisGeoJson = JSON.stringify(
+      {
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            properties: { name: '中心点' },
+            geometry: { type: 'Point', coordinates: [121.4737, 31.2304] },
+          },
+          {
+            type: 'Feature',
+            properties: { name: '示例路线' },
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                [121.4708, 31.2288],
+                [121.4737, 31.2304],
+                [121.477, 31.232],
+              ],
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    );
   }
   if (kind === 'line') {
     base.series = [24, 42, 35, 68, 54, 76];

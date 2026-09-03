@@ -118,7 +118,7 @@ function TextField({
   const [touched, setTouched] = useState(false);
   const error = touched ? validateFieldValue(descriptor, draft) : null;
   const shared = {
-    className: `form-input ${error ? 'input-invalid' : ''}`,
+    className: `form-input ${descriptor.code ? 'code-input' : ''} ${error ? 'input-invalid' : ''}`,
     value: draft,
     onChange: (e: { target: { value: string } }) => {
       setTouched(true);
@@ -133,7 +133,11 @@ function TextField({
   return (
     <label className="form-row" style={{ display: 'block' }}>
       <span className="form-label">{descriptor.label}</span>
-      {textarea ? <textarea rows={2} {...shared} /> : <input type="text" {...shared} />}
+      {textarea ? (
+        <textarea rows={descriptor.rows ?? 2} {...shared} />
+      ) : (
+        <input type="text" {...shared} />
+      )}
       {error ? <span className="field-error">{error}</span> : null}
       {descriptor.help && !error ? <span className="field-hint">{descriptor.help}</span> : null}
     </label>

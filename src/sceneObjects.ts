@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { SceneNode } from './types';
 import { buildText3D, textSprite, updateObjectText } from './threeText';
+import { parseGeoJson, projectGisPosition } from './lib/gis';
 
 export { updateObjectText };
 
@@ -76,6 +77,7 @@ function group(...items: THREE.Object3D[]) {
 export function buildObject(node: SceneNode): THREE.Object3D {
   const color = node.color ?? '#34d399';
   if (node.kind === 'group') return new THREE.Group();
+  if (node.kind === 'gisMap') return buildGisMap(node);
   if (node.kind === 'line') return buildLineChart(node);
   if (node.kind === 'gauge') return buildGauge(node);
   if (node.kind === 'bar') return buildBar(node);
@@ -167,6 +169,183 @@ export function buildObject(node: SceneNode): THREE.Object3D {
   if (node.kind === 'model')
     return group(mesh(new THREE.IcosahedronGeometry(0.95, 1), color, [0, 1, 0], true));
   return group(box([1.5, 1.5, 1.5], color, [0, 0.75, 0], true));
+}
+
+const GIS_PALETTES = {
+  dark: { base: '#14212b', minor: '#263b47', major: '#466172', border: '#718a99' },
+  light: { base: '#cbd5d1', minor: '#a7b5b0', major: '#758c84', border: '#4d6760' },
+  blue: { base: '#10283b', minor: '#1c4660', major: '#347594', border: '#66aac2' },
+} as const;
+
+function buildGisTileTexture(
+  node: SceneNode,
+  palette: (typeof GIS_PALETTES)[keyof typeof GIS_PALETTES],
+) {
+  const template = node.gisTileUrl?.trim();
+  if (!template || typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 768;
+  canvas.height = 768;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  context.fillStyle = palette.base;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const drawAttribution = () => {
+    const attribution = node.gisAttribution?.trim();
+    if (!attribution) return;
+    context.font = '18px sans-serif';
+    const width = context.measureText(attribution).width;
+    context.fillStyle = 'rgba(8, 16, 24, 0.72)';
+    context.fillRect(canvas.width - width - 18, canvas.height - 28, width + 14, 26);
+    context.fillStyle = '#e5eef4';
+    context.fillText(attribution, canvas.width - width - 11, canvas.height - 9);
+  };
+
+  let zoom = Math.round(Math.min(19, Math.max(0, node.gisZoom ?? 15)));
+  let tileCount = 2 ** zoom;
+  const longitude = node.gisLongitude ?? 121.4737;
+  const latitude = Math.min(85.05112878, Math.max(-85.05112878, node.gisLatitude ?? 31.2304));
+  const latitudeRadians = (latitude * Math.PI) / 180;
+  let metersPerPixel =
+    (Math.cos(latitudeRadians) * 2 * Math.PI * 6378137) / (256 * tileCount);
+  let sourceSpan = Math.max(1, (node.gisRange ?? 1200) / metersPerPixel);
+  while (sourceSpan > 1280 && zoom > 0) {
+    zoom -= 1;
+    tileCount = 2 ** zoom;
+    metersPerPixel =
+      (Math.cos(latitudeRadians) * 2 * Math.PI * 6378137) / (256 * tileCount);
+    sourceSpan = Math.max(1, (node.gisRange ?? 1200) / metersPerPixel);
+  }
+  const centerTileX = ((longitude + 180) / 360) * tileCount;
+  const centerTileY =
+    ((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2) * tileCount;
+  const sourceScale = canvas.width / sourceSpan;
+  const topLeftX = centerTileX * 256 - sourceSpan / 2;
+  const topLeftY = centerTileY * 256 - sourceSpan / 2;
+  const minTileX = Math.floor(topLeftX / 256);
+  const maxTileX = Math.floor((topLeftX + sourceSpan) / 256);
+  const minTileY = Math.floor(topLeftY / 256);
+  const maxTileY = Math.floor((topLeftY + sourceSpan) / 256);
+
+  for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+    if (tileY < 0 || tileY >= tileCount) continue;
+    for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+      const wrappedX = ((tileX % tileCount) + tileCount) % tileCount;
+      const image = new Image();
+      image.crossOrigin = 'anonymous';
+      image.onload = () => {
+        context.drawImage(
+          image,
+          (tileX * 256 - topLeftX) * sourceScale,
+          (tileY * 256 - topLeftY) * sourceScale,
+          256 * sourceScale,
+          256 * sourceScale,
+        );
+        drawAttribution();
+        texture.needsUpdate = true;
+      };
+      image.src = template
+        .replace(/\{z\}/g, String(zoom))
+        .replace(/\{x\}/g, String(wrappedX))
+        .replace(/\{y\}/g, String(tileY));
+    }
+  }
+  drawAttribution();
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function buildGisMap(node: SceneNode) {
+  const root = group();
+  const palette = GIS_PALETTES[node.gisMapStyle ?? 'dark'];
+  if (node.gisShowBasemap ?? true) {
+    const base = box([12, 0.1, 12], palette.base, [0, 0.05, 0]);
+    base.receiveShadow = true;
+    root.add(base);
+    const tileTexture = buildGisTileTexture(node, palette);
+    if (tileTexture) {
+      const tileSurface = new THREE.Mesh(
+        new THREE.PlaneGeometry(12, 12),
+        new THREE.MeshBasicMaterial({ map: tileTexture, toneMapped: false }),
+      );
+      tileSurface.rotation.x = -Math.PI / 2;
+      tileSurface.position.y = 0.106;
+      tileSurface.userData.gisBasemap = true;
+      root.add(tileSurface);
+    }
+
+    const borderOffset = 6.02;
+    root.add(
+      box([12.12, 0.035, 0.05], palette.border, [0, 0.12, -borderOffset]),
+      box([12.12, 0.035, 0.05], palette.border, [0, 0.12, borderOffset]),
+      box([0.05, 0.035, 12.12], palette.border, [-borderOffset, 0.12, 0]),
+      box([0.05, 0.035, 12.12], palette.border, [borderOffset, 0.12, 0]),
+    );
+
+    if (node.gisShowGrid ?? true) {
+      for (let index = -5; index <= 5; index += 1) {
+        const coordinate = index * 1.2;
+        const gridColor = index === 0 ? palette.major : palette.minor;
+        const thickness = index === 0 ? 0.035 : 0.018;
+        root.add(
+          box([12, 0.014, thickness], gridColor, [0, 0.115, coordinate]),
+          box([thickness, 0.014, 12], gridColor, [coordinate, 0.115, 0]),
+        );
+      }
+    }
+  }
+
+  const center: [number, number] = [node.gisLongitude ?? 121.4737, node.gisLatitude ?? 31.2304];
+  const range = node.gisRange ?? 1200;
+  const overlayHeight = Math.max(0, node.gisOverlayHeight ?? 0.12) + 0.12;
+  const overlayColor = node.color ?? '#35d0b1';
+  const { primitives } = parseGeoJson(node.gisGeoJson);
+
+  primitives.forEach((primitive) => {
+    if (primitive.kind === 'point') {
+      const [x, z] = projectGisPosition(primitive.point, center, range);
+      root.add(cylinder(0.13, 0.13, 0.22, overlayColor, [x, overlayHeight + 0.11, z], true, 18));
+      return;
+    }
+    if (primitive.kind === 'line') {
+      const points = primitive.points.map((point) => projectGisPosition(point, center, range));
+      for (let index = 0; index < points.length - 1; index += 1) {
+        const start = points[index];
+        const end = points[index + 1];
+        root.add(
+          beamBetween(
+            [start[0], overlayHeight, start[1]],
+            [end[0], overlayHeight, end[1]],
+            0.045,
+            overlayColor,
+            true,
+          ),
+        );
+      }
+      return;
+    }
+
+    const projectedRings = primitive.rings.map((ring) =>
+      ring.map((point) => projectGisPosition(point, center, range)),
+    );
+    const outer = projectedRings[0];
+    if (!outer?.length) return;
+    const shape = new THREE.Shape(outer.map(([x, z]) => new THREE.Vector2(x, -z)));
+    shape.holes = projectedRings.slice(1).map(
+      (ring) => new THREE.Path(ring.map(([x, z]) => new THREE.Vector2(x, -z))),
+    );
+    const polygon = new THREE.Mesh(new THREE.ShapeGeometry(shape), standard(overlayColor, true));
+    polygon.rotation.x = -Math.PI / 2;
+    polygon.position.y = overlayHeight - 0.01;
+    polygon.userData.tintable = true;
+    polygon.userData.baseOpacity = 0.32;
+    root.add(polygon);
+  });
+
+  return root;
 }
 
 function buildBuilding(color: string) {

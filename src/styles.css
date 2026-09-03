@@ -2195,6 +2195,11 @@ textarea.form-input {
 .form-input:focus {
   border-color: #7ce5c1;
 }
+.form-input.code-input {
+  min-height: 112px;
+  resize: vertical;
+  font: 10px/1.55 'DM Mono', monospace;
+}
 .form-input.input-invalid {
   border-color: #ef7680;
 }

@@ -2,6 +2,16 @@
 
 基于 React、Three.js 和 FastAPI 的 3D 可视化拖拽编辑器 MVP，提供项目中心、组件库、三维场景画布、属性面板和场景编排能力。
 
+## 运行效果
+
+### 智慧楼宇与园区安防
+
+![智慧楼宇与园区安防运行态](docs/screenshots/smart-park-runtime.jpg)
+
+### 智能工厂产线监控
+
+![智能工厂产线监控运行态](docs/screenshots/smart-factory-runtime.jpg)
+
 ## 项目说明
 
 当前实现覆盖最终需求规格说明书中的核心开发链路：
@@ -57,9 +67,9 @@
 
 前端使用哈希路由，无需服务端路由配置：
 
-| 路由 | 页面 | 说明 |
-|---|---|---|
-| `#/` | 项目中心 | 项目列表（默认页）、搜索、新建、删除 |
+| 路由            | 页面       | 说明                                   |
+| --------------- | ---------- | -------------------------------------- |
+| `#/`            | 项目中心   | 项目列表（默认页）、搜索、新建、删除   |
 | `#/project/:id` | 项目编辑器 | 场景编辑、预览、发布、回滚（页内切换） |
 
 ## 目录结构
@@ -146,12 +156,12 @@ API 健康检查：`http://localhost:8000/api/health`
 
 ### 后端数据与安全配置
 
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `DATA_DIR` | 项目根目录下的 `data/` | 项目索引、资源、发布产物、任务和加密凭证目录 |
-| `APP_SECRET_KEY` | 自动生成 `DATA_DIR/.secret-key` | 数据源凭证加密主密钥；生产环境应固定配置并妥善备份 |
-| `DATA_SOURCE_ALLOW_PRIVATE` | `0` | 默认拒绝本机、私网和保留地址；仅在明确可信的内网数据源环境设为 `1` |
-| `ALLOWED_ORIGINS` | 空 | 跨域部署时允许访问 API 的前端来源，多个值用逗号分隔 |
+| 环境变量                    | 默认值                          | 说明                                                               |
+| --------------------------- | ------------------------------- | ------------------------------------------------------------------ |
+| `DATA_DIR`                  | 项目根目录下的 `data/`          | 项目索引、资源、发布产物、任务和加密凭证目录                       |
+| `APP_SECRET_KEY`            | 自动生成 `DATA_DIR/.secret-key` | 数据源凭证加密主密钥；生产环境应固定配置并妥善备份                 |
+| `DATA_SOURCE_ALLOW_PRIVATE` | `0`                             | 默认拒绝本机、私网和保留地址；仅在明确可信的内网数据源环境设为 `1` |
+| `ALLOWED_ORIGINS`           | 空                              | 跨域部署时允许访问 API 的前端来源，多个值用逗号分隔                |
 
 资源上传接口已经同步完成校验，正常使用不依赖单独启动 Worker。`backend/worker.py` 仅保留文件任务队列的维护入口；目录初始化、发布文件检查和资源重验可执行：
 
@@ -198,25 +208,25 @@ node scripts/fonts/verify_font.mjs
 
 标注“前端已接入”的接口由页面实际调用；其余为后端可用、前端暂未消费的能力。
 
-| 方法 | 路径 | 说明 | 前端 |
-|---|---|---|---|
-| GET | `/api/health` | 健康检查 | — |
-| GET | `/api/projects` | 项目列表（含示例项目元信息） | ✅ 已接入 |
-| POST | `/api/projects` | 创建项目 | ✅ 已接入 |
-| DELETE | `/api/projects/{id}` | 删除项目 | ✅ 已接入 |
-| GET/PUT | `/api/projects/{id}/draft` | 读取/保存草稿（409 表示版本冲突） | ✅ 已接入 |
-| POST | `/api/projects/{id}/releases` | 创建发布版本 | ✅ 已接入 |
-| GET | `/api/projects/{id}/releases` | 查询历史版本 | ✅ 已接入 |
-| GET/POST | `/api/projects/{id}/assets` | 查询/上传项目资源 | ✅ 已接入 |
-| GET/DELETE | `/api/assets/{id}` | 查询/删除资源元数据 | ✅ 已接入 |
-| GET | `/api/assets/{id}/content` | 读取资源内容 | ✅ 已接入 |
-| POST | `/api/data-sources/test` | 测试数据源并提取字段 | ✅ 已接入 |
-| POST | `/api/data-sources/fetch` | 运行态代理拉取数据 | ✅ 已接入 |
-| POST | `/api/runtime/errors` | 上报运行错误（按 projectId 归属） | ✅ 已接入 |
-| POST | `/api/releases/{id}/rollback` | 回滚版本 | 暂未接入（前端本地回滚） |
-| GET | `/api/runtime/{id}` | 获取运行态场景 | 暂未接入（预览使用当前场景） |
-| GET/DELETE | `/api/projects/{id}/errors` | 查询/清理运行错误列表 | ✅ 已接入 |
-| WS | `/api/runtime/{id}/ws` | 实时数据通道（回声占位） | 暂未接入 |
+| 方法       | 路径                          | 说明                              | 前端                         |
+| ---------- | ----------------------------- | --------------------------------- | ---------------------------- |
+| GET        | `/api/health`                 | 健康检查                          | —                            |
+| GET        | `/api/projects`               | 项目列表（含示例项目元信息）      | ✅ 已接入                    |
+| POST       | `/api/projects`               | 创建项目                          | ✅ 已接入                    |
+| DELETE     | `/api/projects/{id}`          | 删除项目                          | ✅ 已接入                    |
+| GET/PUT    | `/api/projects/{id}/draft`    | 读取/保存草稿（409 表示版本冲突） | ✅ 已接入                    |
+| POST       | `/api/projects/{id}/releases` | 创建发布版本                      | ✅ 已接入                    |
+| GET        | `/api/projects/{id}/releases` | 查询历史版本                      | ✅ 已接入                    |
+| GET/POST   | `/api/projects/{id}/assets`   | 查询/上传项目资源                 | ✅ 已接入                    |
+| GET/DELETE | `/api/assets/{id}`            | 查询/删除资源元数据               | ✅ 已接入                    |
+| GET        | `/api/assets/{id}/content`    | 读取资源内容                      | ✅ 已接入                    |
+| POST       | `/api/data-sources/test`      | 测试数据源并提取字段              | ✅ 已接入                    |
+| POST       | `/api/data-sources/fetch`     | 运行态代理拉取数据                | ✅ 已接入                    |
+| POST       | `/api/runtime/errors`         | 上报运行错误（按 projectId 归属） | ✅ 已接入                    |
+| POST       | `/api/releases/{id}/rollback` | 回滚版本                          | 暂未接入（前端本地回滚）     |
+| GET        | `/api/runtime/{id}`           | 获取运行态场景                    | 暂未接入（预览使用当前场景） |
+| GET/DELETE | `/api/projects/{id}/errors`   | 查询/清理运行错误列表             | ✅ 已接入                    |
+| WS         | `/api/runtime/{id}/ws`        | 实时数据通道（回声占位）          | 暂未接入                     |
 
 说明：后端已预置 6 个示例项目的元信息（草稿内容为空）；前端打开未保存过草稿的示例项目时，会使用 `src/demos.ts` 中的内置场景作为编辑起点，首次自动保存后即持久化到后端。
 
